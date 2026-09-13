@@ -1,0 +1,15 @@
+export const outrunQueryKeys = {
+  all: ["outrun"] as const,
+  config: (chainId: number, address: string) => ["outrun", "config", chainId, address] as const,
+  markets: (chainId: number, address: string, offset: number, limit: number) => ["outrun", "markets", chainId, address, offset, limit] as const,
+  market: (chainId: number, address: string, marketId: number) => ["outrun", "market", chainId, address, marketId] as const,
+  position: (chainId: number, address: string, wallet: string, marketId: number) => ["outrun", "position", chainId, address, wallet, marketId] as const,
+  bettingState: (chainId: number, address: string, wallet: string, marketId: number) => ["outrun", "betting-state", chainId, address, wallet, marketId] as const,
+  positions: (chainId: number, address: string, wallet: string, offset: number, limit: number) => ["outrun", "portfolio", chainId, address, wallet, offset, limit] as const,
+  myMarketCount: (chainId: number, address: string, wallet: string) => ["outrun", "my-market-count", chainId, address, wallet] as const,
+  claimable: (chainId: number, address: string, wallet: string, offset: number, limit: number) => ["outrun", "claimable", chainId, address, wallet, offset, limit] as const,
+  activity: (chainId: number, address: string, wallet: string, offset: number, limit: number) => ["outrun", "activity", chainId, address, wallet, offset, limit] as const,
+  activityCount: (chainId: number, address: string, wallet: string) => ["outrun", "activity-count", chainId, address, wallet] as const,
+  evidence: (chainId: number, address: string, marketId: number, source: string) => ["outrun", "source-evidence", chainId, address, marketId, source] as const,
+  chart: (marketId: number, symbol: string, start: number, end: number) => ["binance-chart", marketId, symbol, start, end] as const,
+};
