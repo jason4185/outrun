@@ -1,14 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAccount, useBalance, useConnect, useDisconnect, useSwitchChain } from "wagmi";
 import { useLocation } from "react-router-dom";
 import type { Hash } from "genlayer-js/types";
+import type { Address } from "viem";
 import { createOutrunProvider, createWalletClient, readClient, transactionSucceeded, type GenLayerWalletProvider, type WalletGenLayerClient } from "../lib/outrun/adapter";
 import { OUTRUN_CONFIG } from "../lib/outrun/config";
 import { normalizeOutrunError } from "../lib/outrun/errors";
 import { outrunQueryKeys } from "../lib/outrun/query-keys";
 import type { ActivityItem, Asset, Category, ContractConfig, Market, OutrunDataProvider, TransactionHandle, UserPosition } from "../lib/outrun/types";
 import { isTransactionActiveStage, readPendingTransactions, savePendingTransactions, updatePendingTransaction, type TrackedTransaction, type TransactionStage } from "../lib/outrun/transactions";
+import { getInjectedProvider, getWalletAddress, getWalletChainId, requestWallet, STUDIO_DEV_CHAIN_HEX, switchToStudioDevnet, watchWallet } from "../lib/outrun/wallet";
 
 export type { TrackedTransaction, TransactionStage } from "../lib/outrun/transactions";
 export { isTransactionActiveStage } from "../lib/outrun/transactions";
@@ -65,12 +66,12 @@ function executionFailureText(transaction: unknown) {
 function actionLabel(action: TransactionHandle["action"]) { return action === "place_bet" ? "Bet" : action === "create_market" ? "Market creation" : action === "settle_market" ? "Settlement" : action === "claim" ? "Claim" : "Refund"; }
 
 export function OutrunProvider({ children }: { children: ReactNode }) {
-  const { address, chainId, isConnected, connector } = useAccount();
-  const { connect, connectors, isPending: walletPending, error: connectError } = useConnect();
-  const { disconnectAsync } = useDisconnect();
-  const { switchChainAsync } = useSwitchChain();
   const { pathname } = useLocation();
   const queryClient = useQueryClient();
+  const [address, setAddress] = useState<Address | null>(null);
+  const [chainId, setChainId] = useState<string | null>(null);
+  const [walletPending, setWalletPending] = useState(false);
+  const [walletError, setWalletError] = useState<Error>();
   const [walletClient, setWalletClient] = useState<WalletGenLayerClient>();
   const [tracked, setTracked] = useState<TrackedTransaction | null>(() => readPendingTransactions()[0] ?? null);
   const [writeBusy, setWriteBusy] = useState(false);
@@ -79,9 +80,10 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const trackedIds = useRef(new Set<string>());
   const resumeTimers = useRef(new Map<string, number>());
   const previousAddress = useRef<string | undefined>(undefined);
-  const connected = Boolean(isConnected && address);
+  const manualDisconnect = useRef(false);
+  const connected = Boolean(address);
   const walletAddress = address ?? "";
-  const wrongNetwork = connected && chainId !== OUTRUN_CONFIG.chainId;
+  const wrongNetwork = connected && chainId !== STUDIO_DEV_CHAIN_HEX;
   const isMarketsRoute = pathname === "/markets";
   const isPortfolioRoute = pathname === "/portfolio";
   const writeActive = writeBusy || isTransactionActiveStage(tracked?.stage);
@@ -97,13 +99,27 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
+    const injected = getInjectedProvider();
+    const sync = async () => {
+      if (!injected) return;
+      try {
+        const [nextAddress, nextChain] = await Promise.all([getWalletAddress(injected), getWalletChainId(injected)]);
+        if (active && !manualDisconnect.current) { setAddress(nextAddress); setChainId(nextChain); setWalletError(undefined); }
+      } catch (error) { if (active) setWalletError(asError(error)); }
+    };
+    void sync();
+    const unwatch = watchWallet(injected, (nextAddress) => { manualDisconnect.current = false; setAddress(nextAddress); if (!nextAddress) setChainId(null); setWalletError(undefined); }, (nextChain) => { setChainId(nextChain); setWalletError(undefined); });
+    return () => { active = false; unwatch(); };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     setWalletClient(undefined);
-    if (!address || !connector || chainId !== OUTRUN_CONFIG.chainId) return () => { active = false; };
-    void connector.getProvider().then((provider) => {
-      if (active) setWalletClient(createWalletClient(address, provider as GenLayerWalletProvider));
-    }).catch(() => { if (active) setWalletClient(undefined); });
+    const injected = getInjectedProvider();
+    if (!address || !injected || chainId !== STUDIO_DEV_CHAIN_HEX || typeof injected.request !== "function") return () => { active = false; };
+    try { setWalletClient(createWalletClient(address, injected as GenLayerWalletProvider)); } catch (error) { setWalletError(asError(error)); }
     return () => { active = false; };
-  }, [address, chainId, connector]);
+  }, [address, chainId]);
 
   const provider = useMemo(() => createOutrunProvider(walletClient), [walletClient]);
   const configQuery = useQuery({ queryKey: outrunQueryKeys.config(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address), queryFn: () => provider.getConfig(), staleTime: 300_000, refetchInterval: false, refetchOnWindowFocus: false });
@@ -114,7 +130,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const activityQuery = useQuery({ queryKey: outrunQueryKeys.activity(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, walletAddress, 0, 50), queryFn: () => provider.getActivity(walletAddress, 0, 50), enabled: userEnabled && (isPortfolioRoute || notificationsOpen) && !writeActive, staleTime: 60_000, refetchInterval: false, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
   const myMarketCountQuery = useQuery({ queryKey: outrunQueryKeys.myMarketCount(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, walletAddress), queryFn: () => provider.getMyMarketCount(walletAddress), enabled: userEnabled && isPortfolioRoute && !writeActive, staleTime: 15_000, refetchInterval: writeActive ? false : 15_000, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
   const activityCountQuery = useQuery({ queryKey: outrunQueryKeys.activityCount(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, walletAddress), queryFn: () => provider.getActivityCount(walletAddress), enabled: userEnabled && !writeActive, staleTime: 60_000, refetchInterval: writeActive ? false : 60_000, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
-  const balanceQuery = useBalance({ address, chainId: OUTRUN_CONFIG.chainId, query: { enabled: userEnabled, staleTime: 60_000, refetchInterval: writeActive ? false : 60_000, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive } });
+  const balanceQuery = useQuery({ queryKey: ["outrun", "balance", OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, walletAddress], queryFn: () => readClient.getBalance({ address: walletAddress as Address }), enabled: userEnabled, staleTime: 60_000, refetchInterval: writeActive ? false : 60_000, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
   const retryRpc = useCallback(async () => { await Promise.all([configQuery.refetch(), marketsQuery.refetch()]); }, [configQuery.refetch, marketsQuery.refetch]);
 
   useEffect(() => {
@@ -178,6 +194,9 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     if (!connected) throw new Error("Connect your injected wallet before submitting.");
     if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting.");
     if (writeBusyRef.current || readPendingTransactions().length > 0) throw new Error("An OUTRUN transaction is already being tracked. Please wait before submitting another action.");
+    const activeAddress = await getWalletAddress();
+    if (!activeAddress || activeAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Wallet account unavailable. Reconnect your injected wallet.");
+    if (await getWalletChainId() !== STUDIO_DEV_CHAIN_HEX) throw new Error("Switch to Studio Dev before submitting.");
     writeBusyRef.current = true;
     setWriteBusy(true);
     let submitted = false;
@@ -200,13 +219,26 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
       writeBusyRef.current = false;
       setWriteBusy(false);
     }
-  }, [connected, resumeTransaction, wrongNetwork]);
+  }, [connected, resumeTransaction, walletAddress, wrongNetwork]);
 
-  const connectWallet = () => { const injected = connectors[0]; if (injected) connect({ connector: injected }); };
-  const switchToStudio = async () => { if (switchChainAsync) await switchChainAsync({ chainId: OUTRUN_CONFIG.chainId }); };
-  const disconnectWallet = async () => { await disconnectAsync(); setWalletClient(undefined); };
+  const connectWallet = useCallback(() => {
+    manualDisconnect.current = false;
+    setWalletPending(true);
+    setWalletError(undefined);
+    void requestWallet().then(async (nextAddress) => {
+      const nextChain = await getWalletChainId();
+      setAddress(nextAddress);
+      setChainId(nextChain);
+    }).catch((error) => setWalletError(asError(error))).finally(() => setWalletPending(false));
+  }, []);
+  const switchToStudio = useCallback(async () => {
+    setWalletPending(true);
+    setWalletError(undefined);
+    try { setChainId(await switchToStudioDevnet()); } catch (error) { setWalletError(asError(error)); } finally { setWalletPending(false); }
+  }, []);
+  const disconnectWallet = useCallback(async () => { manualDisconnect.current = true; setAddress(null); setChainId(null); setWalletClient(undefined); setWalletError(undefined); }, []);
   const getPosition = (marketId: number) => positionsQuery.data?.find((position) => position.marketId === marketId) ?? null;
-  const requireWallet = () => { if (!walletClient) throw new Error("Wallet provider is not ready. Reconnect your injected wallet."); };
+  const requireWallet = () => { if (!connected) throw new Error("Connect your injected wallet before submitting."); if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting."); if (!walletClient) throw new Error("Wallet provider is not ready. Reconnect your injected wallet."); };
   const placeBet = (marketId: number, asset: Asset, amount: bigint) => { requireWallet(); return trackWrite(() => provider.placeBet(marketId, asset, amount)); };
   const claim = (marketId: number) => { requireWallet(); return trackWrite(() => provider.claim(marketId)); };
   const claimRefund = (marketId: number) => { requireWallet(); return trackWrite(() => provider.claimRefund(marketId)); };
@@ -216,8 +248,8 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const value = useMemo<OutrunContextValue>(() => ({
     provider, config: configQuery.data, configLoading: configQuery.isLoading, markets: marketsQuery.data ?? [], marketsLoading: marketsQuery.isLoading, marketsError: marketsQuery.error ? asError(marketsQuery.error) : null, refetchMarkets: marketsQuery.refetch, rpcError: configQuery.error ? asError(configQuery.error) : marketsQuery.error ? asError(marketsQuery.error) : null, retryRpc,
     positions: positionsQuery.data ?? [], positionsLoading: positionsQuery.isLoading, positionsError: positionsQuery.error ? asError(positionsQuery.error) : null, claimablePositions: claimableQuery.data ?? [], myMarketCount: myMarketCountQuery.data, activities: activityQuery.data ?? [], activityCount: activityCountQuery.data, activityLoading: activityQuery.isLoading, notificationsOpen, setNotificationsOpen,
-    connected, walletAddress, balance: balanceQuery.data?.value, wrongNetwork, walletPending, walletError: connectError ? asError(connectError) : undefined, writeBusy, connectWallet, switchToStudio, disconnectWallet, getPosition, placeBet, claim, claimRefund, settleMarket, createMarket, transaction: tracked, dismissTransaction: () => setTracked((current) => current && (current.stage === "FINALIZED_SUCCESS" || current.stage === "FINALIZED_ERROR") ? null : current),
-  }), [activityCountQuery.data, activityQuery.data, activityQuery.isLoading, balanceQuery.data?.value, claimableQuery.data, configQuery.data, configQuery.error, configQuery.isLoading, connectError, connected, createMarket, getPosition, marketsQuery.data, marketsQuery.error, marketsQuery.isLoading, marketsQuery.refetch, myMarketCountQuery.data, notificationsOpen, placeBet, positionsQuery.data, positionsQuery.error, positionsQuery.isLoading, provider, retryRpc, setNotificationsOpen, settleMarket, tracked, walletAddress, walletPending, wrongNetwork, writeBusy]);
+    connected, walletAddress, balance: balanceQuery.data, wrongNetwork, walletPending, walletError, writeBusy, connectWallet, switchToStudio, disconnectWallet, getPosition, placeBet, claim, claimRefund, settleMarket, createMarket, transaction: tracked, dismissTransaction: () => setTracked((current) => current && (current.stage === "FINALIZED_SUCCESS" || current.stage === "FINALIZED_ERROR") ? null : current),
+  }), [activityCountQuery.data, activityQuery.data, activityQuery.isLoading, balanceQuery.data, claimableQuery.data, configQuery.data, configQuery.error, configQuery.isLoading, connected, createMarket, disconnectWallet, getPosition, marketsQuery.data, marketsQuery.error, marketsQuery.isLoading, marketsQuery.refetch, myMarketCountQuery.data, notificationsOpen, placeBet, positionsQuery.data, positionsQuery.error, positionsQuery.isLoading, provider, retryRpc, setNotificationsOpen, settleMarket, switchToStudio, tracked, walletAddress, walletError, walletPending, wrongNetwork, writeBusy]);
 
   return <OutrunContext.Provider value={value}>{children}</OutrunContext.Provider>;
 }
