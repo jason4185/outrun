@@ -6,6 +6,15 @@ OUTRUN is a GenLayer-powered one-hour index-dominance prediction market. Each
 market contains three fixed assets, and participants predict which asset will
 produce the strongest percentage return during the same exact one-hour window.
 
+## Current Deployment
+
+- Live frontend: <https://outrun-one.vercel.app>
+- Repository: <https://github.com/jason4185/outrun>
+- Contract: [`0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8`](https://explorer-studio-dev.genlayer.com/address/0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8)
+- Network: GenLayer Studio Dev / Studio Next
+- Chain ID: `61997`
+- RPC: `https://studio-dev.genlayer.com/api`
+
 ## What is OUTRUN?
 
 OUTRUN turns relative performance into a simple prediction market. A market is
@@ -183,9 +192,40 @@ settlement evidence, claims, and refunds. GenLayer consensus validates the
 nondeterministic source evaluations, which read the locked market-data feeds
 from Bybit, Gate, and Bitget.
 
-The contract source is pinned to `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` in its first line. The intended interactive environment is GenLayer Studio Next / Studio-dev; this repository does not contain a populated network deployment configuration.
+The contract source is pinned to `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` in its first line. The frontend uses the Studio Dev / Studio Next deployment above as its canonical OUTRUN network and contract configuration.
 
 The current Studio Dev deployment is [`0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8`](https://explorer-studio-dev.genlayer.com/address/0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8) on chain ID `61997`, using `https://studio-dev.genlayer.com/api`. Contract settlement uses Bybit, Gate, and Bitget; Binance is used only for the frontend's informational chart.
+
+### Wallet and Data Ownership
+
+The frontend uses one direct injected EIP-1193 wallet owner. It restores an
+already-authorized account with `eth_accounts`, requests access only after an
+explicit connect action with `eth_requestAccounts`, and listens for account and
+chain changes. Writes use a provider-backed GenLayer client, so the connected
+wallet signs and submits the transaction. Public reads use a separate GenLayer
+client on Studio Dev.
+
+The contract and GenLayer RPC are the source of truth for markets, pools,
+positions, winners, settlement evidence, claims, refunds, activity, and
+configuration. The frontend does not persist authoritative protocol state in
+browser storage; its in-memory query cache is for presentation and performance
+only.
+
+### Live Settlement Proof
+
+Market `1` (`US_INDICES`, `2026-09-14 10:00–11:00 UTC`) settled successfully on
+Studio Dev through transaction
+[`0x3253b996a193e9f9245cd710185c64f82dd48fef59202349e79f2276ea8b532b`](https://explorer-studio-dev.genlayer.com/tx/0x3253b996a193e9f9245cd710185c64f82dd48fef59202349e79f2276ea8b532b).
+The final result was `SETTLED` with `QQQ` as the winner. Bybit was
+`UNAVAILABLE`, while Gate and Bitget independently returned `QQQ`, so the
+contract resolved through its 2-of-3 quorum. This demonstrates tolerance of a
+temporarily unavailable third source; it does not claim that all three sources
+were healthy for this settlement.
+
+The market-performance chart may use Binance market data for visualization
+only. Binance does not decide the winner, supply contract settlement evidence,
+modify contract state, or participate in the 2-of-3 settlement quorum. The
+contract result remains authoritative.
 
 ## Contract Interface
 
