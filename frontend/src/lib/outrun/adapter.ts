@@ -1,7 +1,7 @@
 import { createClient, isSuccessful } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import { TransactionHashVariant, type CalldataEncodable, type GenLayerClient, type Hash } from "genlayer-js/types";
-import type { Account, Address } from "viem";
+import { isAddress, type Account, type Address } from "viem";
 import { ASSETS, CATEGORIES, SOURCES, type ActivityItem, type Asset, type BettingState, type Category, type ContractConfig, type ContractState, type Market, type OutrunDataProvider, type SourceEvidence, type SourceName, type SourceResult, type TransactionHandle, type UserPosition } from "./types";
 import { OUTRUN_CONFIG } from "./config";
 
@@ -11,10 +11,6 @@ type ReadClient = GenLayerClient<typeof studioDevnet>;
 
 export const readClient = createClient({ chain: OUTRUN_CONFIG.chain });
 export type WalletGenLayerClient = ReadClient;
-
-function readAccount(address?: string): Account | undefined {
-  return address ? ({ address: address as Address } as Account) : undefined;
-}
 
 function asBigInt(value: unknown): bigint {
   if (typeof value === "bigint") return value;
@@ -113,7 +109,7 @@ function normalizeBettingState(value: unknown): BettingState {
 }
 
 async function read<T>(client: ReadClient, functionName: string, args: CalldataEncodable[] = [], account?: string): Promise<T> {
-  return await client.readContract({ address: OUTRUN_CONFIG.address, functionName, args, account: readAccount(account), transactionHashVariant: TransactionHashVariant.LATEST_FINAL }) as T;
+  return await client.readContract({ address: OUTRUN_CONFIG.address, functionName, args, ...(account ? { account: account as unknown as Account } : {}), transactionHashVariant: TransactionHashVariant.LATEST_FINAL }) as T;
 }
 
 async function write(client: WalletGenLayerClient | undefined, action: TransactionHandle["action"], functionName: string, args: CalldataEncodable[], value?: bigint, marketId?: number): Promise<TransactionHandle> {
@@ -165,6 +161,8 @@ export function createOutrunProvider(walletClient?: WalletGenLayerClient): Outru
 }
 
 export function createWalletClient(address: Address, provider: GenLayerWalletProvider): WalletGenLayerClient {
+  if (!isAddress(address)) throw new Error("Wallet account unavailable. Reconnect your injected wallet.");
+  if (!provider || typeof provider.request !== "function") throw new Error("Injected wallet provider is unavailable. Reconnect your wallet.");
   return createClient({ chain: OUTRUN_CONFIG.chain, account: address, provider });
 }
 
