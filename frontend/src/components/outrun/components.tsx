@@ -4,6 +4,7 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { isTransactionActiveStage, useOutrun, type TransactionStage } from "../../app/context";
 import { OUTRUN_CONFIG } from "../../lib/outrun/config";
 import { normalizeOutrunError } from "../../lib/outrun/errors";
+import { readStoredStringList, writeStoredStringList } from "../../lib/outrun/storage";
 import { ASSET_COLORS, ASSET_NAMES, CATEGORY_LABEL, SOURCE_LABEL, SOURCES, type Asset, type Category, type Market, type MarketStatus, type NotificationRecord, type NotificationType, type PerformancePoint, type SourceEvidence, type TransactionHandle, type UserPosition } from "../../lib/outrun/types";
 
 const GEN_SCALE = 1_000_000_000_000_000_000n;
@@ -56,18 +57,13 @@ function notificationContext(item: NotificationRecord) { const category = item.c
 export function NotificationBell() {
   const { activities, activityCount, notificationsOpen, setNotificationsOpen } = useOutrun();
   const navigate = useNavigate();
-  const [readIds, setReadIds] = useState<string[]>(() => {
-    try {
-      const value: unknown = JSON.parse(localStorage.getItem("outrun.read-notifications.v1") ?? "[]");
-      return Array.isArray(value) && value.every((item): item is string => typeof item === "string") ? value.slice(-100) : [];
-    } catch { return []; }
-  });
+  const [readIds, setReadIds] = useState<string[]>(() => readStoredStringList("outrun.read-notifications.v1", 100));
   const container = useRef<HTMLDivElement>(null);
   const notifications = activities.map(activityToNotification).map((item) => ({ ...item, unread: !readIds.includes(item.id) }));
   const unreadCount = notifications.length ? notifications.filter((item) => item.unread).length : Math.max(0, (activityCount ?? 0) - readIds.length);
   const close = () => setNotificationsOpen(false);
   useEffect(() => { if (!notificationsOpen) return; const outside = (event: PointerEvent) => { if (container.current && event.target instanceof Node && !container.current.contains(event.target)) close(); }; const escape = (event: KeyboardEvent) => { if (event.key === "Escape") close(); }; document.addEventListener("pointerdown", outside); document.addEventListener("keydown", escape); return () => { document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape); }; }, [notificationsOpen]);
-  const markRead = (ids: string[]) => { const next = [...new Set([...readIds, ...ids])]; setReadIds(next); try { localStorage.setItem("outrun.read-notifications.v1", JSON.stringify(next.slice(-100))); } catch { /* best effort */ } };
+  const markRead = (ids: string[]) => { const next = [...new Set([...readIds, ...ids])].slice(-100); setReadIds(next); writeStoredStringList("outrun.read-notifications.v1", next, 100); };
   const openNotification = (item: NotificationRecord) => { markRead([item.id]); close(); if (item.marketId !== undefined) navigate(`/market/${item.marketId}`); };
   return <div className="notification-wrap" ref={container}><button className="notification-trigger" type="button" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`} aria-expanded={notificationsOpen} aria-haspopup="dialog" onClick={() => setNotificationsOpen(!notificationsOpen)}><Bell aria-hidden="true" />{unreadCount > 0 && <><span className="notification-dot" aria-hidden="true" /><span className="sr-only">{unreadCount} unread notification{unreadCount === 1 ? "" : "s"}</span></>}</button>{notificationsOpen && <NotificationPanel notifications={notifications} onNotificationClick={openNotification} onMarkAllRead={() => markRead(notifications.map((item) => item.id))} />}</div>;
 }

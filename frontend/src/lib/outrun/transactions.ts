@@ -1,15 +1,12 @@
 import type { TransactionHandle } from "./types";
+import { readStoredJson, writeStoredJson } from "./storage";
 
 export const TX_STORAGE_KEY = "outrun.pending-transactions.v1";
+const MAX_PENDING_TRANSACTIONS = 50;
 const ACTIONS = ["create_market", "place_bet", "settle_market", "claim", "claim_refund"] as const;
 export type TransactionAction = typeof ACTIONS[number];
 export type TransactionStage = "PREPARING" | "AWAITING_WALLET" | "SUBMITTING" | "SUBMITTED" | "WAITING_FOR_DECISION" | "DECIDED" | "WAITING_FOR_FINALIZATION" | "FINALIZED_SUCCESS" | "FINALIZED_ERROR" | "PRE_SUBMISSION_ERROR" | "TRACKING_ERROR";
 export interface TrackedTransaction { txId: string; action: TransactionHandle["action"]; marketId?: number; timestamp: number; stage: TransactionStage; message?: string; }
-
-function getStorage(): Storage | undefined {
-  if (typeof window === "undefined") return undefined;
-  try { return window.localStorage; } catch { return undefined; }
-}
 
 function record(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
@@ -36,16 +33,15 @@ export function parseTrackedTransaction(value: unknown): TrackedTransaction | un
 }
 
 export function readPendingTransactions(): TrackedTransaction[] {
-  const storage = getStorage();
-  if (!storage) return [];
-  let parsed: unknown;
-  try { parsed = JSON.parse(storage.getItem(TX_STORAGE_KEY) ?? "[]"); } catch { try { storage.removeItem(TX_STORAGE_KEY); } catch { /* best effort */ } return []; }
-  if (!Array.isArray(parsed)) { try { storage.removeItem(TX_STORAGE_KEY); } catch { /* best effort */ } return []; }
-  const valid = parsed.map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item));
-  if (valid.length !== parsed.length) { try { storage.setItem(TX_STORAGE_KEY, JSON.stringify(valid)); } catch { /* best effort */ } }
-  return valid;
+  return readStoredJson(TX_STORAGE_KEY, (value) => {
+    if (!Array.isArray(value)) return undefined;
+    return value.slice(-MAX_PENDING_TRANSACTIONS).map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item));
+  }, []);
 }
 
-export function savePendingTransactions(items: TrackedTransaction[]) { try { getStorage()?.setItem(TX_STORAGE_KEY, JSON.stringify(items)); } catch { /* best effort */ } }
+export function savePendingTransactions(items: TrackedTransaction[]) {
+  const entries = Array.isArray(items) ? items : [];
+  writeStoredJson(TX_STORAGE_KEY, entries.map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item)));
+}
 export function updatePendingTransaction(txId: string, patch: Partial<TrackedTransaction>) { savePendingTransactions(readPendingTransactions().map((item) => item.txId === txId ? { ...item, ...patch } : item)); }
 export function isTransactionActiveStage(value: TransactionStage | undefined) { return value !== undefined && !["FINALIZED_SUCCESS", "FINALIZED_ERROR", "PRE_SUBMISSION_ERROR"].includes(value); }
