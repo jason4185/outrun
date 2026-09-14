@@ -87,6 +87,15 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const writeActive = writeBusy || isTransactionActiveStage(tracked?.stage);
 
   useEffect(() => {
+    try {
+      window.localStorage.removeItem("outrun.pending-transactions.v1");
+      window.localStorage.removeItem("outrun.read-notifications.v1");
+    } catch {
+      // Legacy cleanup is best effort and must not affect application startup.
+    }
+  }, []);
+
+  useEffect(() => {
     let active = true;
     setWalletClient(undefined);
     if (!address || !connector || chainId !== OUTRUN_CONFIG.chainId) return () => { active = false; };

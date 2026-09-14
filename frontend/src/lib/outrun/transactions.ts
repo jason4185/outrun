@@ -1,7 +1,5 @@
 import type { TransactionHandle } from "./types";
-import { readStoredJson, writeStoredJson } from "./storage";
 
-export const TX_STORAGE_KEY = "outrun.pending-transactions.v1";
 const MAX_PENDING_TRANSACTIONS = 50;
 const ACTIONS = ["create_market", "place_bet", "settle_market", "claim", "claim_refund"] as const;
 export type TransactionAction = typeof ACTIONS[number];
@@ -32,16 +30,15 @@ export function parseTrackedTransaction(value: unknown): TrackedTransaction | un
   return { txId: item.txId, action: item.action as TransactionAction, ...(item.marketId !== undefined ? { marketId: item.marketId as number } : {}), timestamp: item.timestamp as number, stage: normalizedStage, ...(item.message !== undefined ? { message: item.message as string } : {}) };
 }
 
+let pendingTransactions: TrackedTransaction[] = [];
+
 export function readPendingTransactions(): TrackedTransaction[] {
-  return readStoredJson(TX_STORAGE_KEY, (value) => {
-    if (!Array.isArray(value)) return undefined;
-    return value.slice(-MAX_PENDING_TRANSACTIONS).map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item));
-  }, []);
+  return pendingTransactions.map((item) => ({ ...item }));
 }
 
 export function savePendingTransactions(items: TrackedTransaction[]) {
   const entries = Array.isArray(items) ? items : [];
-  writeStoredJson(TX_STORAGE_KEY, entries.map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item)));
+  pendingTransactions = entries.slice(-MAX_PENDING_TRANSACTIONS).map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item));
 }
 export function updatePendingTransaction(txId: string, patch: Partial<TrackedTransaction>) { savePendingTransactions(readPendingTransactions().map((item) => item.txId === txId ? { ...item, ...patch } : item)); }
 export function isTransactionActiveStage(value: TransactionStage | undefined) { return value !== undefined && !["FINALIZED_SUCCESS", "FINALIZED_ERROR", "PRE_SUBMISSION_ERROR"].includes(value); }
