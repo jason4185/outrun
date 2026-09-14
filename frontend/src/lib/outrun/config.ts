@@ -1,7 +1,7 @@
 import { isAddress, type Address } from "viem";
 import { studioDevnet } from "genlayer-js/chains";
 
-const deployedAddress = "0x87E53BEC8ab6bECfFE7f05d3bFB7A39b8e14A76b";
+const deployedAddress = "0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8";
 const configuredAddress = import.meta.env.VITE_OUTRUN_CONTRACT_ADDRESS?.trim() || deployedAddress;
 
 if (!isAddress(configuredAddress)) {

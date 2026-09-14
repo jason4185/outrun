@@ -18,7 +18,7 @@ CATEGORY_COUNT = 3
 OUTCOME_COUNT = 3
 OUTCOME_NONE = 3
 
-SOURCE_BINANCE = "BINANCE"
+SOURCE_BYBIT = "BYBIT"
 SOURCE_GATE = "GATE"
 SOURCE_BITGET = "BITGET"
 
@@ -234,7 +234,7 @@ def _asset_name(category, asset) -> str:
 
 
 def _symbol(source: str, category: u256, asset: u256) -> str:
-    if source != SOURCE_BINANCE and source != SOURCE_GATE and source != SOURCE_BITGET:
+    if source != SOURCE_BYBIT and source != SOURCE_GATE and source != SOURCE_BITGET:
         raise gl.vm.UserError("invalid source")
     category_id = _category_id(category)
     asset_id = _asset_id(category_id, asset)
@@ -246,7 +246,7 @@ def _symbol(source: str, category: u256, asset: u256) -> str:
 
 
 def _sources() -> list[str]:
-    return [SOURCE_BINANCE, SOURCE_GATE, SOURCE_BITGET]
+    return [SOURCE_BYBIT, SOURCE_GATE, SOURCE_BITGET]
 
 
 def _now() -> int:
@@ -359,10 +359,7 @@ def _array_candle(payload, timestamp: int, source: str):
     if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], list):
         return None
     row = payload[0]
-    expected_length = 12 if source == SOURCE_BINANCE else 7
-    if len(row) != expected_length or _parse_integer(row[0]) != timestamp:
-        return None
-    if source == SOURCE_BINANCE and _parse_integer(row[6]) != timestamp + 3_599_999:
+    if len(row) != 7 or _parse_integer(row[0]) != timestamp:
         return None
     opening = _parse_price(row[1])
     high = _parse_price(row[2])
@@ -371,6 +368,28 @@ def _array_candle(payload, timestamp: int, source: str):
     if opening is None or high is None or low is None or closing is None:
         return None
     return timestamp, opening, closing
+
+
+def _bybit_candle(payload, timestamp: int, symbol: str):
+    if not isinstance(payload, dict) or payload.get("retCode") != 0:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict) or result.get("category") != "linear" or result.get("symbol") != symbol:
+        return None
+    rows = result.get("list")
+    if not isinstance(rows, list) or len(rows) > 3:
+        return None
+    for row in rows:
+        if not isinstance(row, list) or len(row) != 7 or _parse_integer(row[0]) != timestamp:
+            continue
+        opening = _parse_price(row[1])
+        high = _parse_price(row[2])
+        low = _parse_price(row[3])
+        closing = _parse_price(row[4])
+        if opening is None or high is None or low is None or closing is None:
+            return None
+        return timestamp, opening, closing
+    return None
 
 
 def _gate_candle(payload, timestamp: int, symbol: str):
@@ -408,9 +427,9 @@ def _fetch_candle(source: str, category: u256, asset: u256, start_seconds: u256,
     symbol = _symbol(source, category, asset)
     start_ms = _mul_u256(start_seconds, 1000)
     end_ms = _mul_u256(end_seconds, 1000)
-    if source == SOURCE_BINANCE:
-        url = "https://fapi.binance.com/fapi/v1/klines?symbol=" + symbol + "&interval=1h&startTime=" + str(start_ms) + "&endTime=" + str(end_ms) + "&limit=1"
-        return _array_candle(_request_json(url), start_ms, SOURCE_BINANCE)
+    if source == SOURCE_BYBIT:
+        url = "https://api.bybit.com/v5/market/kline?category=linear&symbol=" + symbol + "&interval=60&start=" + str(start_ms) + "&end=" + str(end_ms) + "&limit=3"
+        return _bybit_candle(_request_json(url), start_ms, symbol)
     if source == SOURCE_GATE:
         url = "https://api.gateio.ws/api/v4/futures/usdt/candlesticks?contract=" + symbol + "&interval=1h&from=" + str(start_seconds) + "&to=" + str(end_seconds - 1)
         return _gate_candle(_request_json(url), start_seconds, symbol)
@@ -726,7 +745,7 @@ class Outrun(gl.contract.Contract):
             "category_id": category,
             "category": _category_name(category),
             "assets": _asset_names(category),
-            "symbols": [_symbol(SOURCE_BINANCE, category, i) for i in range(OUTCOME_COUNT)],
+            "symbols": [_symbol(SOURCE_BYBIT, category, i) for i in range(OUTCOME_COUNT)],
             "symbols_by_source": {source: [_symbol(source, category, i) for i in range(OUTCOME_COUNT)] for source in _sources()},
             "market_start": self.market_start_seconds[market_id],
             "market_end": self.market_end_seconds[market_id],

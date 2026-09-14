@@ -10,8 +10,8 @@ export type Asset = (typeof ASSETS)[Category][number];
 
 export type ContractState = "OPEN" | "SETTLEMENT_PENDING" | "SETTLED" | "INCONCLUSIVE";
 export type MarketStatus = "OPEN" | "LIVE" | "SETTLEMENT_PENDING" | "READY_TO_SETTLE" | "RESOLVED" | "INCONCLUSIVE";
-export type SourceName = "BINANCE" | "GATE" | "BITGET";
-export const SOURCES = ["BINANCE", "GATE", "BITGET"] as const;
+export type SourceName = "BYBIT" | "GATE" | "BITGET";
+export const SOURCES = ["BYBIT", "GATE", "BITGET"] as const;
 
 export interface AssetPool { asset: Asset; pool: bigint; share: number; returnPct?: number; }
 export interface PerformancePoint { timestamp: number; values: Record<Asset, number>; rawValues?: Partial<Record<Asset, number>>; }
@@ -110,4 +110,4 @@ export interface OutrunDataProvider {
 export const CATEGORY_LABEL: Record<Category, string> = { US_INDICES: "US Indices", ASIA_INDICES: "Asia Indices", SECTOR_INDICES: "Sector Indices" };
 export const ASSET_NAMES: Record<Asset, string> = { SPY: "S&P 500 ETF", QQQ: "Nasdaq-100 ETF", IWM: "Russell 2000 ETF", EWJ: "Japan ETF", EWY: "South Korea ETF", EWT: "Taiwan ETF", SMH: "Semiconductor ETF", XBI: "Biotech ETF", XLE: "Energy ETF" };
 export const ASSET_COLORS: Record<Asset, string> = { SPY: "#4F8CFF", QQQ: "#A978FF", IWM: "#FF9B52", EWJ: "#4F8CFF", EWY: "#A978FF", EWT: "#FF9B52", SMH: "#4F8CFF", XBI: "#A978FF", XLE: "#FF9B52" };
-export const SOURCE_LABEL: Record<SourceName, string> = { BINANCE: "Binance", GATE: "Gate", BITGET: "Bitget" };
+export const SOURCE_LABEL: Record<SourceName, string> = { BYBIT: "Bybit", GATE: "Gate", BITGET: "Bitget" };

@@ -113,7 +113,7 @@ competition window.
 
 | Source | Feed | Symbol format |
 |---|---|---|
-| Binance | USDⓈ-M perpetual market klines at `/fapi/v1/klines` | `SPYUSDT` |
+| Bybit | Linear perpetual market klines at `/v5/market/kline` | `SPYUSDT` |
 | Gate | USDT-M futures market candlesticks at `/api/v4/futures/usdt/candlesticks` | `SPY_USDT` |
 | Bitget | USDT futures market candles at `/api/v3/market/candles`, `type=market` | `SPYUSDT` |
 
@@ -132,7 +132,7 @@ path.
 ```mermaid
 flowchart TD
     A[OUTRUN Market<br/>Exact 1-hour window] --> B[Independent source evaluation]
-    B --> C[Binance<br/>Market candle → source winner or non-vote]
+    B --> C[Bybit<br/>Market candle → source winner or non-vote]
     B --> D[Gate<br/>Market candle → source winner or non-vote]
     B --> E[Bitget<br/>Market candle → source winner or non-vote]
     C --> F[GenLayer leader result + validator refetch]
@@ -181,9 +181,11 @@ The frontend presents markets and wallet actions. The OUTRUN intelligent
 contract owns category configuration, lifecycle timestamps, bets, pools,
 settlement evidence, claims, and refunds. GenLayer consensus validates the
 nondeterministic source evaluations, which read the locked market-data feeds
-from Binance, Gate, and Bitget.
+from Bybit, Gate, and Bitget.
 
 The contract source is pinned to `py-genlayer:5jycge4q8k23462jtb0b9fyey1s9qz928sz2nbrd9mg4sxqg2qng` in its first line. The intended interactive environment is GenLayer Studio Next / Studio-dev; this repository does not contain a populated network deployment configuration.
+
+The current Studio Dev deployment is [`0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8`](https://explorer-studio-dev.genlayer.com/address/0x5e04EA0ded5902Bf9115c7aa2Ef424E1b9E1d5c8) on chain ID `61997`, using `https://studio-dev.genlayer.com/api`. Contract settlement uses Bybit, Gate, and Bitget; Binance is used only for the frontend's informational chart.
 
 ## Contract Interface
 
@@ -302,5 +304,5 @@ OUTRUN/
 
 OUTRUN V1's intelligent contract is implemented in `contracts/Outrun.py`, with
 a separate frontend scaffold in `frontend/`. The repository contains the
-contract test layout and frontend validation scripts; network deployment and
-live contract configuration are not included in this repository snapshot.
+contract test layout and frontend validation scripts. The frontend is configured
+for the current Studio Dev deployment listed above.

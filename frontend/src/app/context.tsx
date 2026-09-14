@@ -236,5 +236,5 @@ export function useOutrunBettingState(marketId: number) {
 export function useOutrunEvidence(marketId: number, relevant = true) {
   const { provider, transaction, writeBusy } = useOutrun();
   const writeActive = writeBusy || isTransactionActiveStage(transaction?.stage);
-  return useQuery({ queryKey: outrunQueryKeys.evidence(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, marketId, "all"), queryFn: async () => Promise.all(((["BINANCE", "GATE", "BITGET"] as const)).map((source) => provider.getSourceEvidence(marketId, source))), enabled: relevant && Number.isInteger(marketId) && marketId > 0, staleTime: 30_000, refetchInterval: writeActive ? false : (query) => query.state.data?.some((item) => item?.status === "UNAVAILABLE") ? 30_000 : false, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
+  return useQuery({ queryKey: outrunQueryKeys.evidence(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, marketId, "all"), queryFn: async () => Promise.all(((["BYBIT", "GATE", "BITGET"] as const)).map((source) => provider.getSourceEvidence(marketId, source))), enabled: relevant && Number.isInteger(marketId) && marketId > 0, staleTime: 30_000, refetchInterval: writeActive ? false : (query) => query.state.data?.some((item) => item?.status === "UNAVAILABLE") ? 30_000 : false, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
 }
