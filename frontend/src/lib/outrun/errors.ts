@@ -1,4 +1,4 @@
-export type OutrunErrorContext = "read" | "write" | "chart" | "post-submit" | "finalized-error" | "fee-estimation" | "submission";
+export type OutrunErrorContext = "read" | "write" | "chart" | "post-submit" | "decision-error" | "finalized-error" | "fee-estimation" | "submission";
 
 export interface NormalizedOutrunError {
   code: string;
@@ -101,8 +101,10 @@ export function normalizeOutrunError(error: unknown, context: OutrunErrorContext
     result = normalized("NOT_INCONCLUSIVE", "Refund unavailable", "Refunds are only available for inconclusive markets.", false, false, error);
   } else if (lower.includes("refund already") || lower.includes("already refunded")) {
     result = normalized("ALREADY_REFUNDED", "Already refunded", "This refund has already been claimed.", false, false, error);
-  } else if (lower.includes("transaction was finalized but could not be completed") || lower.includes("finished_with_error")) {
-    result = normalized("FINALIZED_ERROR", "Transaction failed", "The transaction was finalized but could not be completed.", false, false, error);
+  } else if (context === "decision-error" || lower.includes("transaction was finalized but could not be completed") || lower.includes("finished_with_error")) {
+    const detail = raw.replace(/^Decision:\s*[^·]+·\s*Execution:\s*[^·]+/iu, "").replace(/^Contract execution error:\s*/iu, "").trim();
+    const message = detail && !["finished_with_error", "unknown"].includes(detail.toLowerCase()) ? `The transaction reached an accepted decision, but contract execution failed: ${detail}` : "The transaction reached an accepted decision, but contract execution failed. Review the market requirements and try again.";
+    result = normalized("DECISION_EXECUTION_ERROR", "Contract execution failed", message, false, true, error);
   } else if (context === "chart" || lower.includes("binance")) {
     result = normalized("CHART_UNAVAILABLE", "Live chart temporarily unavailable", "We couldn't load Binance market data. We'll retry shortly.", true, false, error);
   } else if (context === "read") {

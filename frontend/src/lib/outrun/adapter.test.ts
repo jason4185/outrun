@@ -1,4 +1,5 @@
-import { assertSettlementEligible, assertWalletConsistency, makeKitWriteRequest } from "./transaction-kit";
+import { assertSettlementEligible, assertWalletConsistency, canStartKitWrite, isSuccessfulDecision, makeKitWriteRequest, refreshAuthoritativeOutrunState } from "./transaction-kit";
+import type { TrackedStatus } from "@genlayer/transaction-kit";
 import { OUTRUN_CONFIG } from "./config";
 import { normalizeOutrunError } from "./errors";
 import { STUDIO_DEV_CHAIN_HEX, type OutrunInjectedProvider } from "./wallet";
@@ -50,4 +51,37 @@ test("RC2 submission keeps the connected account and provider network authoritat
 test("fee-estimation errors retain a distinct reviewer-facing classification", () => {
   const error = normalizeOutrunError(new Error("fee policy unavailable"), "fee-estimation");
   assert(error.code === "FEE_ESTIMATION_FAILED", "fee estimation should not fall through to generic rejection");
+});
+
+const decidedStatus = (successful: boolean): TrackedStatus => ({ phase: "decided", successful, statusName: successful ? "ACCEPTED" : "ACCEPTED", executionResultName: successful ? "FINISHED_WITH_RETURN" : "FINISHED_WITH_ERROR", genlayerTxId: `0x${"1".repeat(64)}` });
+
+test("accepted decision plus FINISHED_WITH_RETURN completes immediately", () => {
+  assert(isSuccessfulDecision(decidedStatus(true)), "successful accepted decision should complete the write");
+});
+
+test("accepted decision with execution error is not success", () => {
+  assert(!isSuccessfulDecision(decidedStatus(false)), "accepted execution error must fail the write");
+});
+
+test("rejected decision is not success", () => {
+  const rejected: TrackedStatus = { phase: "decided", successful: false, statusName: "REJECTED", executionResultName: "FINISHED_WITH_ERROR" };
+  assert(!isSuccessfulDecision(rejected), "rejected decision must fail the write");
+});
+
+test("successful decision does not require finalization", () => {
+  const notFinalized: TrackedStatus = { ...decidedStatus(true), phase: "decided" };
+  assert(isSuccessfulDecision(notFinalized), "finalization must not be a UI success prerequisite");
+});
+
+test("write guard prevents duplicate submission while state refetches", () => {
+  assert(canStartKitWrite(false, false), "an idle write may start");
+  assert(!canStartKitWrite(true, false), "writeBusy must block a duplicate");
+  assert(!canStartKitWrite(false, true), "an active kit request must block a duplicate");
+});
+
+test("successful decision refreshes authoritative contract state and balance", () => {
+  let invalidated = false;
+  let balanceRefetched = false;
+  refreshAuthoritativeOutrunState(async () => { invalidated = true; }, async () => { balanceRefetched = true; });
+  assert(invalidated && balanceRefetched, "post-decision refetches must be scheduled");
 });

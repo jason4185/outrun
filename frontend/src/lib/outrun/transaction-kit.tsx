@@ -19,6 +19,28 @@ export function makeKitWriteRequest(action: TransactionHandle["action"], method:
 
 export type KitErrorPhase = "fee-estimation" | "submission" | "tracking";
 
+/**
+ * RC2 populates `successful` with genlayer-js' isSuccessful result once a
+ * transaction reaches a decided state. That helper already requires an
+ * accepted decision and FINISHED_WITH_RETURN, so UI success must not depend
+ * on display strings or finalization.
+ */
+export function isSuccessfulDecision(status: Pick<TrackedStatus, "successful">): boolean {
+  return status.successful === true;
+}
+
+export function canStartKitWrite(writeBusy: boolean, requestActive: boolean): boolean {
+  return !writeBusy && !requestActive;
+}
+
+export function refreshAuthoritativeOutrunState(
+  invalidate: () => Promise<unknown>,
+  refetchBalance: () => Promise<unknown>,
+): void {
+  void invalidate().catch(() => undefined);
+  void refetchBalance().catch(() => undefined);
+}
+
 export async function assertSettlementEligible(provider: OutrunDataProvider, marketId: number): Promise<Market> {
   const market = await provider.getMarket(marketId);
   if (!market) throw new Error("Market not found.");
@@ -113,12 +135,12 @@ export function OutrunTransactionPanel({
   injected?: OutrunInjectedProvider;
   readProvider: OutrunDataProvider;
   request: KitWriteRequest;
-  onDone: (status: TrackedStatus) => void;
+  onDone: (status: TrackedStatus) => void | Promise<void>;
   onError: (error: unknown, phase: KitErrorPhase) => void;
 }) {
   const submissionAccount = request.account ?? account;
   const kit = useOutrunTransactionKit(submissionAccount, injected, readProvider, onError);
   const doneRef = useRef(false);
   if (!kit) return <div className="gltk-root transaction-kit-unavailable">Reconnect the same injected wallet to continue.</div>;
-  return <GenLayerTransactionPanel kit={kit} tx={request.tx} userValue={request.userValue} network="Studio Next · chain 61997" theme="dark" trackUntil="finalized" onDone={(status) => { if (doneRef.current) return; doneRef.current = true; queueMicrotask(() => onDone(status)); }} />;
+  return <GenLayerTransactionPanel kit={kit} tx={request.tx} userValue={request.userValue} network="Studio Next · chain 61997" theme="dark" trackUntil="decided" onDone={(status) => { if (doneRef.current) return; doneRef.current = true; queueMicrotask(() => { void onDone(status); }); }} />;
 }

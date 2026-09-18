@@ -3,13 +3,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import type { Address } from "viem";
 import type { TrackedStatus } from "@genlayer/transaction-kit";
+import type { Hash } from "genlayer-js/types";
 import { createOutrunProvider, readClient } from "../lib/outrun/adapter";
 import { OUTRUN_CONFIG } from "../lib/outrun/config";
 import { normalizeOutrunError } from "../lib/outrun/errors";
 import { outrunQueryKeys } from "../lib/outrun/query-keys";
 import type { ActivityItem, Asset, Category, ContractConfig, Market, OutrunDataProvider, TransactionHandle, UserPosition } from "../lib/outrun/types";
 import { isTransactionActiveStage, type TrackedTransaction, type TransactionStage } from "../lib/outrun/transactions";
-import { assertSettlementEligible, makeKitWriteRequest, OutrunTransactionPanel, type KitErrorPhase, type KitWriteRequest } from "../lib/outrun/transaction-kit";
+import { assertSettlementEligible, canStartKitWrite, isSuccessfulDecision, makeKitWriteRequest, OutrunTransactionPanel, refreshAuthoritativeOutrunState, type KitErrorPhase, type KitWriteRequest } from "../lib/outrun/transaction-kit";
 import { getInjectedProvider, getWalletAddress, getWalletChainId, requestWallet, STUDIO_DEV_CHAIN_HEX, switchToStudioDevnet, watchWallet, type OutrunInjectedProvider } from "../lib/outrun/wallet";
 
 export type { TrackedTransaction, TransactionStage } from "../lib/outrun/transactions";
@@ -60,7 +61,20 @@ const OutrunContext = createContext<OutrunContextValue | null>(null);
 function asError(error: unknown) { return error instanceof Error ? error : new Error(String(error)); }
 function actionLabel(action: TransactionHandle["action"]) { return action === "place_bet" ? "Bet" : action === "create_market" ? "Market creation" : action === "settle_market" ? "Settlement" : action === "claim" ? "Claim" : "Refund"; }
 
-interface KitFailure { error: unknown; submitted: boolean; phase?: KitErrorPhase; finalized?: boolean; }
+async function decisionFailureMessage(status: TrackedStatus, txId: string): Promise<string> {
+  try {
+    const transaction = await readClient.getTransaction({ hash: txId as Hash });
+    const raw = transaction as unknown as Record<string, unknown>;
+    for (const key of ["error", "reason", "message", "executionError", "execution_error"]) {
+      if (typeof raw[key] === "string" && raw[key]) return String(raw[key]);
+    }
+  } catch (error) {
+    if (import.meta.env.DEV) console.debug("[OUTRUN] decision error detail unavailable", error);
+  }
+  return `Decision: ${status.statusName ?? "unknown"} · Execution: ${status.executionResultName ?? "unknown"}`;
+}
+
+interface KitFailure { error: unknown; submitted: boolean; phase?: KitErrorPhase; decision?: boolean; finalized?: boolean; }
 
 export function OutrunProvider({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
@@ -133,7 +147,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     previousAddress.current = walletAddress || undefined;
   }, [queryClient, walletAddress]);
 
-  const completeKitRequest = useCallback((status: TrackedStatus) => {
+  const completeKitRequest = useCallback(async (status: TrackedStatus) => {
     const pending = kitRequestRef.current;
     if (!pending) return;
     kitRequestRef.current = null;
@@ -143,23 +157,23 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
       pending.reject({ error: new Error("Transaction completed without a GenLayer transaction hash."), submitted: true } satisfies KitFailure);
       return;
     }
-    const success = status.successful !== false;
+    const success = isSuccessfulDecision(status);
+    const message = success ? `${actionLabel(pending.request.action)} accepted and executed successfully.` : await decisionFailureMessage(status, txId);
     const item: TrackedTransaction = {
       txId,
       action: pending.request.action,
       ...(pending.request.marketId !== undefined ? { marketId: pending.request.marketId } : {}),
       timestamp: Date.now(),
-      stage: success ? "FINALIZED_SUCCESS" : "FINALIZED_ERROR",
-      message: success ? `${actionLabel(pending.request.action)} finalized successfully.` : `${status.statusName ?? status.executionResultName ?? "Transaction execution failed"}`,
+      stage: success ? "DECIDED_SUCCESS" : "DECIDED_ERROR",
+      message,
     };
     setTracked(item);
     if (!success) {
-      pending.reject({ error: new Error(item.message), submitted: true, finalized: true } satisfies KitFailure);
+      pending.reject({ error: new Error(item.message), submitted: true, decision: true } satisfies KitFailure);
       return;
     }
     pending.resolve({ txId, action: pending.request.action, marketId: pending.request.marketId });
-    void queryClient.invalidateQueries({ queryKey: ["outrun"] });
-    void balanceQuery.refetch().catch(() => undefined);
+    refreshAuthoritativeOutrunState(() => queryClient.invalidateQueries({ queryKey: ["outrun"] }), balanceQuery.refetch);
   }, [balanceQuery.refetch, queryClient]);
 
   const failKitRequest = useCallback((error: unknown, phase: KitErrorPhase) => {
@@ -174,7 +188,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     if (!connected) throw new Error("Connect your injected wallet before submitting.");
     if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting.");
     if (!injected) throw new Error("Injected wallet provider is unavailable. Reconnect your wallet.");
-    if (writeBusyRef.current || kitRequestRef.current) throw new Error("An OUTRUN transaction is already being tracked. Please wait before submitting another action.");
+    if (!canStartKitWrite(writeBusyRef.current, Boolean(kitRequestRef.current))) throw new Error("An OUTRUN transaction is already being tracked. Please wait before submitting another action.");
     const activeAddress = await getWalletAddress(injected);
     if (!activeAddress || activeAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Wallet account unavailable. Reconnect your injected wallet.");
     if (await getWalletChainId(injected) !== STUDIO_DEV_CHAIN_HEX) throw new Error("Switch to Studio Dev before submitting.");
@@ -188,7 +202,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
       });
     } catch (error) {
       const failure = error && typeof error === "object" && "error" in error ? error as KitFailure : { error, submitted: false };
-      const context = failure.finalized ? "finalized-error" : failure.submitted ? "post-submit" : failure.phase === "fee-estimation" ? "fee-estimation" : failure.phase === "submission" ? "submission" : "write";
+      const context = failure.decision ? "decision-error" : failure.finalized ? "finalized-error" : failure.submitted ? "post-submit" : failure.phase === "fee-estimation" ? "fee-estimation" : failure.phase === "submission" ? "submission" : "write";
       const friendly = normalizeOutrunError(failure.error, context, failure.submitted);
       throw new Error(friendly.message);
     } finally {
@@ -228,7 +242,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const value = useMemo<OutrunContextValue>(() => ({
     provider, config: configQuery.data, configLoading: configQuery.isLoading, markets: marketsQuery.data ?? [], marketsLoading: marketsQuery.isLoading, marketsError: marketsQuery.error ? asError(marketsQuery.error) : null, refetchMarkets: marketsQuery.refetch, rpcError: configQuery.error ? asError(configQuery.error) : marketsQuery.error ? asError(marketsQuery.error) : null, retryRpc,
     positions: positionsQuery.data ?? [], positionsLoading: positionsQuery.isLoading, positionsError: positionsQuery.error ? asError(positionsQuery.error) : null, claimablePositions: claimableQuery.data ?? [], myMarketCount: myMarketCountQuery.data, activities: activityQuery.data ?? [], activityCount: activityCountQuery.data, activityLoading: activityQuery.isLoading, notificationsOpen, setNotificationsOpen,
-    connected, walletAddress, balance: balanceQuery.data, wrongNetwork, walletPending, walletError, writeBusy, connectWallet, switchToStudio, disconnectWallet, getPosition, placeBet, claim, claimRefund, settleMarket, createMarket, transaction: tracked, dismissTransaction: () => setTracked((current) => current && (current.stage === "FINALIZED_SUCCESS" || current.stage === "FINALIZED_ERROR") ? null : current),
+    connected, walletAddress, balance: balanceQuery.data, wrongNetwork, walletPending, walletError, writeBusy, connectWallet, switchToStudio, disconnectWallet, getPosition, placeBet, claim, claimRefund, settleMarket, createMarket, transaction: tracked, dismissTransaction: () => setTracked((current) => current && (current.stage === "DECIDED_SUCCESS" || current.stage === "DECIDED_ERROR" || current.stage === "FINALIZED_SUCCESS" || current.stage === "FINALIZED_ERROR") ? null : current),
   }), [activityCountQuery.data, activityQuery.data, activityQuery.isLoading, balanceQuery.data, claimableQuery.data, configQuery.data, configQuery.error, configQuery.isLoading, connected, createMarket, disconnectWallet, getPosition, marketsQuery.data, marketsQuery.error, marketsQuery.isLoading, marketsQuery.refetch, myMarketCountQuery.data, notificationsOpen, placeBet, positionsQuery.data, positionsQuery.error, positionsQuery.isLoading, provider, retryRpc, setNotificationsOpen, settleMarket, switchToStudio, tracked, walletAddress, walletError, walletPending, wrongNetwork, writeBusy]);
 
   return <OutrunContext.Provider value={value}>

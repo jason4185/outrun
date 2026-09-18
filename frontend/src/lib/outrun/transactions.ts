@@ -3,14 +3,14 @@ import type { TransactionHandle } from "./types";
 const MAX_PENDING_TRANSACTIONS = 50;
 const ACTIONS = ["create_market", "place_bet", "settle_market", "claim", "claim_refund"] as const;
 export type TransactionAction = typeof ACTIONS[number];
-export type TransactionStage = "PREPARING" | "AWAITING_WALLET" | "SUBMITTING" | "SUBMITTED" | "WAITING_FOR_DECISION" | "DECIDED" | "WAITING_FOR_FINALIZATION" | "FINALIZED_SUCCESS" | "FINALIZED_ERROR" | "PRE_SUBMISSION_ERROR" | "TRACKING_ERROR";
+export type TransactionStage = "PREPARING" | "AWAITING_WALLET" | "SUBMITTING" | "SUBMITTED" | "WAITING_FOR_DECISION" | "DECIDED" | "DECIDED_SUCCESS" | "DECIDED_ERROR" | "WAITING_FOR_FINALIZATION" | "FINALIZED_SUCCESS" | "FINALIZED_ERROR" | "PRE_SUBMISSION_ERROR" | "TRACKING_ERROR";
 export interface TrackedTransaction { txId: string; action: TransactionHandle["action"]; marketId?: number; timestamp: number; stage: TransactionStage; message?: string; }
 
 function record(value: unknown): Record<string, unknown> | undefined { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined; }
 
 function stage(value: unknown): TransactionStage | undefined {
   if (typeof value !== "string") return undefined;
-  if (["SUBMITTED", "WAITING_FOR_DECISION", "DECIDED", "WAITING_FOR_FINALIZATION", "TRACKING_ERROR"].includes(value)) return value as TransactionStage;
+  if (["SUBMITTED", "WAITING_FOR_DECISION", "DECIDED", "DECIDED_SUCCESS", "DECIDED_ERROR", "WAITING_FOR_FINALIZATION", "TRACKING_ERROR"].includes(value)) return value as TransactionStage;
   if (["PREPARING", "AWAITING_WALLET", "SUBMITTING", "FINALIZED_SUCCESS", "FINALIZED_ERROR"].includes(value)) return "WAITING_FOR_FINALIZATION";
   if (value === "PROCESSING") return "WAITING_FOR_DECISION";
   if (value === "FINALIZING" || value === "FINALIZED") return "WAITING_FOR_FINALIZATION";
@@ -41,4 +41,4 @@ export function savePendingTransactions(items: TrackedTransaction[]) {
   pendingTransactions = entries.slice(-MAX_PENDING_TRANSACTIONS).map(parseTrackedTransaction).filter((item): item is TrackedTransaction => Boolean(item));
 }
 export function updatePendingTransaction(txId: string, patch: Partial<TrackedTransaction>) { savePendingTransactions(readPendingTransactions().map((item) => item.txId === txId ? { ...item, ...patch } : item)); }
-export function isTransactionActiveStage(value: TransactionStage | undefined) { return value !== undefined && !["FINALIZED_SUCCESS", "FINALIZED_ERROR", "PRE_SUBMISSION_ERROR"].includes(value); }
+export function isTransactionActiveStage(value: TransactionStage | undefined) { return value !== undefined && !["DECIDED_SUCCESS", "DECIDED_ERROR", "FINALIZED_SUCCESS", "FINALIZED_ERROR", "PRE_SUBMISSION_ERROR"].includes(value); }
