@@ -1,13 +1,24 @@
 import { createClient, isSuccessful } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import { TransactionHashVariant, type CalldataEncodable, type GenLayerClient, type Hash } from "genlayer-js/types";
-import { type Account } from "viem";
+import { type Account, type Address } from "viem";
 import { ASSETS, CATEGORIES, SOURCES, type ActivityItem, type Asset, type BettingState, type Category, type ContractConfig, type ContractState, type Market, type OutrunDataProvider, type SourceEvidence, type SourceName, type SourceResult, type UserPosition } from "./types";
 import { OUTRUN_CONFIG } from "./config";
 
 type ReadClient = GenLayerClient<typeof studioDevnet>;
 
 export const readClient = createClient({ chain: OUTRUN_CONFIG.chain });
+
+/**
+ * GenLayerJS 2.0.0-rc.1 reads the sender from `account.address`. A bare
+ * address string is accepted by some higher-level viem APIs, but this SDK
+ * release treats it as an account object and falls back to zeroAddress.
+ * This JSON-RPC account is read-only and is derived from the connected wallet;
+ * it does not create or own a second wallet.
+ */
+export function senderAccountForRead(address: string): Account {
+  return { address: address as Address, type: "json-rpc" };
+}
 
 function asBigInt(value: unknown): bigint {
   if (typeof value === "bigint") return value;
@@ -106,34 +117,34 @@ function normalizeBettingState(value: unknown): BettingState {
 }
 
 async function read<T>(client: ReadClient, functionName: string, args: CalldataEncodable[] = [], account?: string): Promise<T> {
-  return await client.readContract({ address: OUTRUN_CONFIG.address, functionName, args, ...(account ? { account: account as unknown as Account } : {}), transactionHashVariant: TransactionHashVariant.LATEST_FINAL }) as T;
+  return await client.readContract({ address: OUTRUN_CONFIG.address, functionName, args, ...(account ? { account: senderAccountForRead(account) } : {}), transactionHashVariant: TransactionHashVariant.LATEST_FINAL }) as T;
 }
 
-export function createOutrunProvider(): OutrunDataProvider {
+export function createOutrunProvider(client: ReadClient = readClient): OutrunDataProvider {
   return {
     async getConfig() {
-      const raw = asRecord(await read(readClient, "get_config"));
+      const raw = asRecord(await read(client, "get_config"));
       const categoryAssets = {} as Record<Category, Asset[]>;
       for (const category of CATEGORIES) categoryAssets[category] = asArray(asRecord(raw.category_assets)[category]).map((asset) => assetOf(asset, category));
       return { protocol: asString(raw.protocol), categories: asArray(raw.categories).map(categoryOf), categoryAssets, durationSeconds: asBigInt(raw.duration_seconds), minimumBet: asBigInt(raw.minimum_bet), maximumBetPerWalletPerMarket: asBigInt(raw.maximum_bet_per_wallet_per_market), feeBps: asBigInt(raw.fee_bps), sources: asArray(raw.sources).map(sourceOf), consensusThreshold: asBigInt(raw.consensus_threshold), timezone: asString(raw.timezone), settlementRetryWindowSeconds: asBigInt(raw.settlement_retry_window_seconds), maxPageSize: asBigInt(raw.max_page_size) };
     },
-    async getCategories() { return asArray(await read(readClient, "categories")).map(categoryOf); },
-    async getCategoryAssets(category) { return asArray(await read(readClient, "category_assets", [category])).map((asset) => assetOf(asset, category)); },
-    async getMarkets(offset = 0, limit = 50) { return asArray(await read(readClient, "get_markets", [BigInt(offset), BigInt(limit)])).map(normalizeMarket); },
-    async getOpenMarkets(offset = 0, limit = 50) { return asArray(await read(readClient, "get_open_markets", [BigInt(offset), BigInt(limit)])).map(normalizeMarket); },
-    async getMarketCount() { return asNumber(await read(readClient, "get_market_count")); },
-    async getMarket(marketId) { return normalizeMarket(await read(readClient, "get_market", [BigInt(marketId)])); },
-    async getMarketByCategoryStart(category, marketStart) { return normalizeMarket(await read(readClient, "get_market_by_category_start", [category, BigInt(marketStart)])); },
-    async getBettingState(marketId, wallet) { return normalizeBettingState(await read(readClient, "get_betting_state", [BigInt(marketId)], wallet)); },
-    async getMyMarketCount(wallet) { return asNumber(await read(readClient, "get_my_market_count", [], wallet)); },
-    async getPosition(marketId, wallet) { return normalizePosition(await read(readClient, "get_my_position", [BigInt(marketId)], wallet)); },
-    async getPositions(wallet, offset = 0, limit = 50) { return asArray(await read(readClient, "get_my_positions", [BigInt(offset), BigInt(limit)], wallet)).map(normalizePosition).filter((position): position is UserPosition => position !== null); },
-    async getClaimablePositions(wallet, offset = 0, limit = 50) { return asArray(await read(readClient, "get_my_claimable_markets", [BigInt(offset), BigInt(limit)], wallet)).map(normalizePosition).filter((position): position is UserPosition => position !== null); },
-    async getActivityCount(wallet) { return asNumber(await read(readClient, "get_my_activity_count", [], wallet)); },
-    async getActivity(wallet, offset = 0, limit = 50) { return asArray(await read(readClient, "get_my_activity", [BigInt(offset), BigInt(limit)], wallet)).map(normalizeActivity); },
+    async getCategories() { return asArray(await read(client, "categories")).map(categoryOf); },
+    async getCategoryAssets(category) { return asArray(await read(client, "category_assets", [category])).map((asset) => assetOf(asset, category)); },
+    async getMarkets(offset = 0, limit = 50) { return asArray(await read(client, "get_markets", [BigInt(offset), BigInt(limit)])).map(normalizeMarket); },
+    async getOpenMarkets(offset = 0, limit = 50) { return asArray(await read(client, "get_open_markets", [BigInt(offset), BigInt(limit)])).map(normalizeMarket); },
+    async getMarketCount() { return asNumber(await read(client, "get_market_count")); },
+    async getMarket(marketId) { return normalizeMarket(await read(client, "get_market", [BigInt(marketId)])); },
+    async getMarketByCategoryStart(category, marketStart) { return normalizeMarket(await read(client, "get_market_by_category_start", [category, BigInt(marketStart)])); },
+    async getBettingState(marketId, wallet) { return normalizeBettingState(await read(client, "get_betting_state", [BigInt(marketId)], wallet)); },
+    async getMyMarketCount(wallet) { return asNumber(await read(client, "get_my_market_count", [], wallet)); },
+    async getPosition(marketId, wallet) { return normalizePosition(await read(client, "get_my_position", [BigInt(marketId)], wallet)); },
+    async getPositions(wallet, offset = 0, limit = 50) { return asArray(await read(client, "get_my_positions", [BigInt(offset), BigInt(limit)], wallet)).map(normalizePosition).filter((position): position is UserPosition => position !== null); },
+    async getClaimablePositions(wallet, offset = 0, limit = 50) { return asArray(await read(client, "get_my_claimable_markets", [BigInt(offset), BigInt(limit)], wallet)).map(normalizePosition).filter((position): position is UserPosition => position !== null); },
+    async getActivityCount(wallet) { return asNumber(await read(client, "get_my_activity_count", [], wallet)); },
+    async getActivity(wallet, offset = 0, limit = 50) { return asArray(await read(client, "get_my_activity", [BigInt(offset), BigInt(limit)], wallet)).map(normalizeActivity); },
     async getSourceEvidence(marketId, source) {
       try {
-        const raw = asRecord(await read(readClient, "get_source_evidence", [BigInt(marketId), source]));
+        const raw = asRecord(await read(client, "get_source_evidence", [BigInt(marketId), source]));
         const category = categoryOf(raw.category);
         const winnerName = asString(raw.source_winner);
         return { source, category, marketStart: asNumber(raw.market_start), marketEnd: asNumber(raw.market_end), interval: asString(raw.interval), winner: winnerName ? assetOf(winnerName, category) : null, status: asString(raw.source_status) as SourceResult["status"] };

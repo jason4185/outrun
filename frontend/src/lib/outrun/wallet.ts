@@ -20,9 +20,9 @@ export const STUDIO_DEV_CHAIN_HEX = `0x${STUDIO_DEV_CHAIN_ID.toString(16)}`;
 
 export function getInjectedProvider(): OutrunInjectedProvider | undefined {
   if (typeof window === "undefined" || !window.ethereum) return undefined;
-  const injected = window.ethereum;
-  if (injected.providers?.length) return injected.providers.find((candidate) => candidate.isRabby) ?? injected.providers[0];
-  return injected;
+  // Use the provider exposed by the page. Selecting a nested provider (for
+  // example Rabby) can make reads and writes belong to different wallets.
+  return window.ethereum;
 }
 
 export function isWalletAddress(value: unknown): value is Address { return typeof value === "string" && isAddress(value); }

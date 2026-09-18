@@ -7,7 +7,7 @@ import type { Hash } from "genlayer-js/types";
 import { createOutrunProvider, readClient } from "../lib/outrun/adapter";
 import { OUTRUN_CONFIG } from "../lib/outrun/config";
 import { normalizeOutrunError } from "../lib/outrun/errors";
-import { outrunQueryKeys } from "../lib/outrun/query-keys";
+import { outrunQueryKeys, walletChanged, walletScopedQueryPrefixes } from "../lib/outrun/query-keys";
 import type { ActivityItem, Asset, Category, ContractConfig, Market, OutrunDataProvider, TransactionHandle, UserPosition } from "../lib/outrun/types";
 import { isTransactionActiveStage, type TrackedTransaction, type TransactionStage } from "../lib/outrun/transactions";
 import { assertSettlementEligible, canStartKitWrite, isSuccessfulDecision, makeKitWriteRequest, OutrunTransactionPanel, refreshAuthoritativeOutrunState, type KitErrorPhase, type KitWriteRequest } from "../lib/outrun/transaction-kit";
@@ -135,14 +135,8 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const retryRpc = useCallback(async () => { await Promise.all([configQuery.refetch(), marketsQuery.refetch()]); }, [configQuery.refetch, marketsQuery.refetch]);
 
   useEffect(() => {
-    if (previousAddress.current && previousAddress.current !== walletAddress) {
-      void queryClient.removeQueries({ queryKey: ["outrun", "portfolio"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "claimable"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "activity"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "position"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "betting-state"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "my-market-count"] });
-      void queryClient.removeQueries({ queryKey: ["outrun", "activity-count"] });
+    if (walletChanged(previousAddress.current, walletAddress)) {
+      for (const prefix of walletScopedQueryPrefixes) void queryClient.removeQueries({ queryKey: ["outrun", prefix] });
     }
     previousAddress.current = walletAddress || undefined;
   }, [queryClient, walletAddress]);

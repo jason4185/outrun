@@ -13,3 +13,9 @@ export const outrunQueryKeys = {
   evidence: (chainId: number, address: string, marketId: number, source: string) => ["outrun", "source-evidence", chainId, address, marketId, source] as const,
   chart: (marketId: number, symbol: string, start: number, end: number) => ["binance-chart", marketId, symbol, start, end] as const,
 };
+
+export const walletScopedQueryPrefixes = ["portfolio", "claimable", "activity", "position", "betting-state", "my-market-count", "activity-count"] as const;
+
+export function walletChanged(previousAddress: string | undefined, nextAddress: string): boolean {
+  return Boolean(previousAddress && previousAddress !== nextAddress);
+}
