@@ -100,11 +100,6 @@ export interface OutrunDataProvider {
   getActivityCount(wallet: string): Promise<number>;
   getActivity(wallet: string, offset?: number, limit?: number): Promise<ActivityItem[]>;
   getSourceEvidence(marketId: number, source: SourceName): Promise<SourceEvidence | null>;
-  createMarket(category: Category, marketStart: number): Promise<TransactionHandle>;
-  placeBet(marketId: number, asset: Asset, amount: bigint): Promise<TransactionHandle>;
-  settleMarket(marketId: number): Promise<TransactionHandle>;
-  claim(marketId: number): Promise<TransactionHandle>;
-  claimRefund(marketId: number): Promise<TransactionHandle>;
 }
 
 export const CATEGORY_LABEL: Record<Category, string> = { US_INDICES: "US Indices", ASIA_INDICES: "Asia Indices", SECTOR_INDICES: "Sector Indices" };

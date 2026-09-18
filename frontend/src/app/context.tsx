@@ -1,15 +1,16 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import type { Hash } from "genlayer-js/types";
 import type { Address } from "viem";
-import { createOutrunProvider, createWalletClient, readClient, transactionSucceeded, type GenLayerWalletProvider, type WalletGenLayerClient } from "../lib/outrun/adapter";
+import type { TrackedStatus } from "@genlayer/transaction-kit";
+import { createOutrunProvider, readClient } from "../lib/outrun/adapter";
 import { OUTRUN_CONFIG } from "../lib/outrun/config";
 import { normalizeOutrunError } from "../lib/outrun/errors";
 import { outrunQueryKeys } from "../lib/outrun/query-keys";
 import type { ActivityItem, Asset, Category, ContractConfig, Market, OutrunDataProvider, TransactionHandle, UserPosition } from "../lib/outrun/types";
-import { isTransactionActiveStage, readPendingTransactions, savePendingTransactions, updatePendingTransaction, type TrackedTransaction, type TransactionStage } from "../lib/outrun/transactions";
-import { getInjectedProvider, getWalletAddress, getWalletChainId, requestWallet, STUDIO_DEV_CHAIN_HEX, switchToStudioDevnet, watchWallet } from "../lib/outrun/wallet";
+import { isTransactionActiveStage, type TrackedTransaction, type TransactionStage } from "../lib/outrun/transactions";
+import { assertSettlementEligible, makeKitWriteRequest, OutrunTransactionPanel, type KitErrorPhase, type KitWriteRequest } from "../lib/outrun/transaction-kit";
+import { getInjectedProvider, getWalletAddress, getWalletChainId, requestWallet, STUDIO_DEV_CHAIN_HEX, switchToStudioDevnet, watchWallet, type OutrunInjectedProvider } from "../lib/outrun/wallet";
 
 export type { TrackedTransaction, TransactionStage } from "../lib/outrun/transactions";
 export { isTransactionActiveStage } from "../lib/outrun/transactions";
@@ -57,13 +58,9 @@ interface OutrunContextValue {
 const OutrunContext = createContext<OutrunContextValue | null>(null);
 
 function asError(error: unknown) { return error instanceof Error ? error : new Error(String(error)); }
-function executionFailureText(transaction: unknown) {
-  if (!transaction || typeof transaction !== "object") return "Transaction execution failed";
-  const value = transaction as Record<string, unknown>;
-  for (const key of ["error", "reason", "txExecutionResultName", "resultName"]) if (typeof value[key] === "string" && value[key]) return value[key] as string;
-  return "Transaction execution failed";
-}
 function actionLabel(action: TransactionHandle["action"]) { return action === "place_bet" ? "Bet" : action === "create_market" ? "Market creation" : action === "settle_market" ? "Settlement" : action === "claim" ? "Claim" : "Refund"; }
+
+interface KitFailure { error: unknown; submitted: boolean; phase?: KitErrorPhase; finalized?: boolean; }
 
 export function OutrunProvider({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
@@ -72,13 +69,13 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const [chainId, setChainId] = useState<string | null>(null);
   const [walletPending, setWalletPending] = useState(false);
   const [walletError, setWalletError] = useState<Error>();
-  const [walletClient, setWalletClient] = useState<WalletGenLayerClient>();
-  const [tracked, setTracked] = useState<TrackedTransaction | null>(() => readPendingTransactions()[0] ?? null);
+  const [injected, setInjected] = useState<OutrunInjectedProvider | undefined>(() => getInjectedProvider());
+  const [tracked, setTracked] = useState<TrackedTransaction | null>(null);
+  const [kitRequest, setKitRequest] = useState<KitWriteRequest | null>(null);
   const [writeBusy, setWriteBusy] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const writeBusyRef = useRef(false);
-  const trackedIds = useRef(new Set<string>());
-  const resumeTimers = useRef(new Map<string, number>());
+  const kitRequestRef = useRef<{ request: KitWriteRequest; resolve: (handle: TransactionHandle) => void; reject: (error: unknown) => void } | null>(null);
   const previousAddress = useRef<string | undefined>(undefined);
   const manualDisconnect = useRef(false);
   const connected = Boolean(address);
@@ -86,7 +83,7 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
   const wrongNetwork = connected && chainId !== STUDIO_DEV_CHAIN_HEX;
   const isMarketsRoute = pathname === "/markets";
   const isPortfolioRoute = pathname === "/portfolio";
-  const writeActive = writeBusy || isTransactionActiveStage(tracked?.stage);
+  const writeActive = writeBusy || Boolean(kitRequest) || isTransactionActiveStage(tracked?.stage);
 
   useEffect(() => {
     try {
@@ -99,7 +96,6 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    const injected = getInjectedProvider();
     const sync = async () => {
       if (!injected) return;
       try {
@@ -110,18 +106,9 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     void sync();
     const unwatch = watchWallet(injected, (nextAddress) => { manualDisconnect.current = false; setAddress(nextAddress); if (!nextAddress) setChainId(null); setWalletError(undefined); }, (nextChain) => { setChainId(nextChain); setWalletError(undefined); });
     return () => { active = false; unwatch(); };
-  }, []);
+  }, [injected]);
 
-  useEffect(() => {
-    let active = true;
-    setWalletClient(undefined);
-    const injected = getInjectedProvider();
-    if (!address || !injected || chainId !== STUDIO_DEV_CHAIN_HEX || typeof injected.request !== "function") return () => { active = false; };
-    try { setWalletClient(createWalletClient(address, injected as GenLayerWalletProvider)); } catch (error) { setWalletError(asError(error)); }
-    return () => { active = false; };
-  }, [address, chainId]);
-
-  const provider = useMemo(() => createOutrunProvider(walletClient), [walletClient]);
+  const provider = useMemo(() => createOutrunProvider(), []);
   const configQuery = useQuery({ queryKey: outrunQueryKeys.config(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address), queryFn: () => provider.getConfig(), staleTime: 300_000, refetchInterval: false, refetchOnWindowFocus: false });
   const marketsQuery = useQuery({ queryKey: outrunQueryKeys.markets(OUTRUN_CONFIG.chainId, OUTRUN_CONFIG.address, 0, 50), queryFn: () => provider.getMarkets(0, 50), enabled: isMarketsRoute || isPortfolioRoute, staleTime: 10_000, refetchInterval: writeActive ? false : 15_000, refetchIntervalInBackground: false, refetchOnWindowFocus: !writeActive });
   const userEnabled = connected && !wrongNetwork;
@@ -146,104 +133,97 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     previousAddress.current = walletAddress || undefined;
   }, [queryClient, walletAddress]);
 
-  const resumeTransaction = useCallback(async (item: TrackedTransaction): Promise<{ status: "finalized" | "failed" | "tracking"; message?: string }> => {
-    if (trackedIds.current.has(item.txId)) return { status: "tracking" };
-    trackedIds.current.add(item.txId);
-    const existingTimer = resumeTimers.current.get(item.txId);
-    if (existingTimer !== undefined) { window.clearTimeout(existingTimer); resumeTimers.current.delete(item.txId); }
-    setTracked({ ...item, stage: "WAITING_FOR_DECISION", message: `${actionLabel(item.action)} transaction is processing.` });
-    updatePendingTransaction(item.txId, { stage: "WAITING_FOR_DECISION" });
-    try {
-      await readClient.waitForDecision({ hash: item.txId as Hash, interval: 5_000, retries: 100 });
-      setTracked({ ...item, stage: "DECIDED", message: `${actionLabel(item.action)} decision received. Finalizing…` });
-      updatePendingTransaction(item.txId, { stage: "DECIDED" });
-      setTracked({ ...item, stage: "WAITING_FOR_FINALIZATION", message: `${actionLabel(item.action)} decision received. Finalizing…` });
-      updatePendingTransaction(item.txId, { stage: "WAITING_FOR_FINALIZATION" });
-      const finalized = await readClient.waitForFinalization({ hash: item.txId as Hash, interval: 5_000, retries: 100 });
-      const verified = await readClient.getTransaction({ hash: item.txId as Hash });
-      if (!transactionSucceeded(verified)) {
-        const failure = normalizeOutrunError(new Error(executionFailureText(verified)), "finalized-error");
-        setTracked({ ...item, stage: "FINALIZED_ERROR", message: failure.message });
-        savePendingTransactions(readPendingTransactions().filter((pending) => pending.txId !== item.txId));
-        resumeTimers.current.delete(item.txId);
-        return { status: "failed", message: failure.message };
-      }
-      setTracked({ ...item, stage: "FINALIZED_SUCCESS", message: `${actionLabel(item.action)} finalized successfully.` });
-      savePendingTransactions(readPendingTransactions().filter((pending) => pending.txId !== item.txId));
-      resumeTimers.current.delete(item.txId);
-      await queryClient.invalidateQueries({ queryKey: ["outrun"] });
-      void balanceQuery.refetch().catch(() => undefined);
-      return { status: "finalized" };
-    } catch (error) {
-      const friendly = normalizeOutrunError(error, "post-submit", true);
-      setTracked({ ...item, stage: "TRACKING_ERROR", message: `${friendly.message} Do not resubmit; tracking ${item.txId.slice(0, 10)}…` });
-      updatePendingTransaction(item.txId, { stage: "TRACKING_ERROR", message: friendly.message });
-      if (!resumeTimers.current.has(item.txId)) {
-        const timer = window.setTimeout(() => { resumeTimers.current.delete(item.txId); void resumeTransaction(item); }, 5_000);
-        resumeTimers.current.set(item.txId, timer);
-      }
-      return { status: "tracking" };
-    } finally { trackedIds.current.delete(item.txId); }
+  const completeKitRequest = useCallback((status: TrackedStatus) => {
+    const pending = kitRequestRef.current;
+    if (!pending) return;
+    kitRequestRef.current = null;
+    setKitRequest(null);
+    const txId = status.genlayerTxId ?? status.evmTxHash;
+    if (!txId) {
+      pending.reject({ error: new Error("Transaction completed without a GenLayer transaction hash."), submitted: true } satisfies KitFailure);
+      return;
+    }
+    const success = status.successful !== false;
+    const item: TrackedTransaction = {
+      txId,
+      action: pending.request.action,
+      ...(pending.request.marketId !== undefined ? { marketId: pending.request.marketId } : {}),
+      timestamp: Date.now(),
+      stage: success ? "FINALIZED_SUCCESS" : "FINALIZED_ERROR",
+      message: success ? `${actionLabel(pending.request.action)} finalized successfully.` : `${status.statusName ?? status.executionResultName ?? "Transaction execution failed"}`,
+    };
+    setTracked(item);
+    if (!success) {
+      pending.reject({ error: new Error(item.message), submitted: true, finalized: true } satisfies KitFailure);
+      return;
+    }
+    pending.resolve({ txId, action: pending.request.action, marketId: pending.request.marketId });
+    void queryClient.invalidateQueries({ queryKey: ["outrun"] });
+    void balanceQuery.refetch().catch(() => undefined);
   }, [balanceQuery.refetch, queryClient]);
 
-  useEffect(() => {
-    for (const item of readPendingTransactions()) void resumeTransaction(item);
-  }, [resumeTransaction]);
+  const failKitRequest = useCallback((error: unknown, phase: KitErrorPhase) => {
+    const pending = kitRequestRef.current;
+    if (!pending) return;
+    kitRequestRef.current = null;
+    setKitRequest(null);
+    pending.reject({ error, submitted: phase === "tracking", phase } satisfies KitFailure);
+  }, []);
 
-  const trackWrite = useCallback(async (startWrite: () => Promise<TransactionHandle>): Promise<TransactionHandle> => {
+  const trackWrite = useCallback(async (request: KitWriteRequest): Promise<TransactionHandle> => {
     if (!connected) throw new Error("Connect your injected wallet before submitting.");
     if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting.");
-    if (writeBusyRef.current || readPendingTransactions().length > 0) throw new Error("An OUTRUN transaction is already being tracked. Please wait before submitting another action.");
-    const activeAddress = await getWalletAddress();
+    if (!injected) throw new Error("Injected wallet provider is unavailable. Reconnect your wallet.");
+    if (writeBusyRef.current || kitRequestRef.current) throw new Error("An OUTRUN transaction is already being tracked. Please wait before submitting another action.");
+    const activeAddress = await getWalletAddress(injected);
     if (!activeAddress || activeAddress.toLowerCase() !== walletAddress.toLowerCase()) throw new Error("Wallet account unavailable. Reconnect your injected wallet.");
-    if (await getWalletChainId() !== STUDIO_DEV_CHAIN_HEX) throw new Error("Switch to Studio Dev before submitting.");
+    if (await getWalletChainId(injected) !== STUDIO_DEV_CHAIN_HEX) throw new Error("Switch to Studio Dev before submitting.");
     writeBusyRef.current = true;
     setWriteBusy(true);
-    let submitted = false;
-    let finalizedFailure: string | undefined;
     try {
-      const handle = await startWrite();
-      submitted = true;
-      const initial: TrackedTransaction = { txId: handle.txId, action: handle.action, marketId: handle.marketId, timestamp: Date.now(), stage: "SUBMITTED" };
-      savePendingTransactions([...readPendingTransactions().filter((item) => item.txId !== handle.txId), initial]);
-      setTracked(initial);
-      const result = await resumeTransaction(initial);
-      if (result.status === "tracking") throw new Error("Transaction status check is still processing.");
-      if (result.status === "failed") { finalizedFailure = result.message ?? "The transaction was finalized but could not be completed."; throw new Error(finalizedFailure); }
-      return handle;
+      return await new Promise<TransactionHandle>((resolve, reject) => {
+        const ownedRequest = { ...request, account: walletAddress };
+        kitRequestRef.current = { request: ownedRequest, resolve, reject };
+        setKitRequest(ownedRequest);
+      });
     } catch (error) {
-      if (finalizedFailure) throw new Error(finalizedFailure);
-      const friendly = normalizeOutrunError(error, submitted ? "post-submit" : "write", submitted);
+      const failure = error && typeof error === "object" && "error" in error ? error as KitFailure : { error, submitted: false };
+      const context = failure.finalized ? "finalized-error" : failure.submitted ? "post-submit" : failure.phase === "fee-estimation" ? "fee-estimation" : failure.phase === "submission" ? "submission" : "write";
+      const friendly = normalizeOutrunError(failure.error, context, failure.submitted);
       throw new Error(friendly.message);
     } finally {
       writeBusyRef.current = false;
       setWriteBusy(false);
     }
-  }, [connected, resumeTransaction, walletAddress, wrongNetwork]);
+  }, [connected, injected, walletAddress, wrongNetwork]);
 
   const connectWallet = useCallback(() => {
     manualDisconnect.current = false;
     setWalletPending(true);
     setWalletError(undefined);
-    void requestWallet().then(async (nextAddress) => {
-      const nextChain = await getWalletChainId();
+    const activeProvider = injected ?? getInjectedProvider();
+    if (!injected && activeProvider) setInjected(activeProvider);
+    void requestWallet(activeProvider).then(async (nextAddress) => {
+      const nextChain = await getWalletChainId(activeProvider);
       setAddress(nextAddress);
       setChainId(nextChain);
     }).catch((error) => setWalletError(asError(error))).finally(() => setWalletPending(false));
-  }, []);
+  }, [injected]);
   const switchToStudio = useCallback(async () => {
     setWalletPending(true);
     setWalletError(undefined);
-    try { setChainId(await switchToStudioDevnet()); } catch (error) { setWalletError(asError(error)); } finally { setWalletPending(false); }
-  }, []);
-  const disconnectWallet = useCallback(async () => { manualDisconnect.current = true; setAddress(null); setChainId(null); setWalletClient(undefined); setWalletError(undefined); }, []);
+    const activeProvider = injected ?? getInjectedProvider();
+    if (!injected && activeProvider) setInjected(activeProvider);
+    try { setChainId(await switchToStudioDevnet(activeProvider)); } catch (error) { setWalletError(asError(error)); } finally { setWalletPending(false); }
+  }, [injected]);
+  const disconnectWallet = useCallback(async () => { manualDisconnect.current = true; setAddress(null); setChainId(null); setWalletError(undefined); }, []);
   const getPosition = (marketId: number) => positionsQuery.data?.find((position) => position.marketId === marketId) ?? null;
-  const requireWallet = () => { if (!connected) throw new Error("Connect your injected wallet before submitting."); if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting."); if (!walletClient) throw new Error("Wallet provider is not ready. Reconnect your injected wallet."); };
-  const placeBet = (marketId: number, asset: Asset, amount: bigint) => { requireWallet(); return trackWrite(() => provider.placeBet(marketId, asset, amount)); };
-  const claim = (marketId: number) => { requireWallet(); return trackWrite(() => provider.claim(marketId)); };
-  const claimRefund = (marketId: number) => { requireWallet(); return trackWrite(() => provider.claimRefund(marketId)); };
-  const settleMarket = (marketId: number) => { requireWallet(); return trackWrite(() => provider.settleMarket(marketId)); };
-  const createMarket = (category: Category, start: number) => { requireWallet(); return trackWrite(() => provider.createMarket(category, start)); };
+  const requireWallet = () => { if (!connected) throw new Error("Connect your injected wallet before submitting."); if (wrongNetwork) throw new Error("Switch to Studio Dev before submitting."); if (!injected) throw new Error("Injected wallet provider is unavailable. Reconnect your wallet."); };
+  const placeBet = (marketId: number, asset: Asset, amount: bigint) => { requireWallet(); return trackWrite(makeKitWriteRequest("place_bet", "place_bet", [BigInt(marketId), asset], marketId, amount)); };
+  const claim = (marketId: number) => { requireWallet(); return trackWrite(makeKitWriteRequest("claim", "claim", [BigInt(marketId)], marketId)); };
+  const claimRefund = (marketId: number) => { requireWallet(); return trackWrite(makeKitWriteRequest("claim_refund", "claim_refund", [BigInt(marketId)], marketId)); };
+  const settleMarket = async (marketId: number) => { requireWallet(); await assertSettlementEligible(provider, marketId); return trackWrite(makeKitWriteRequest("settle_market", "settle_market", [BigInt(marketId)], marketId)); };
+  const createMarket = (category: Category, start: number) => { requireWallet(); return trackWrite(makeKitWriteRequest("create_market", "create_market", [category, BigInt(start)])); };
 
   const value = useMemo<OutrunContextValue>(() => ({
     provider, config: configQuery.data, configLoading: configQuery.isLoading, markets: marketsQuery.data ?? [], marketsLoading: marketsQuery.isLoading, marketsError: marketsQuery.error ? asError(marketsQuery.error) : null, refetchMarkets: marketsQuery.refetch, rpcError: configQuery.error ? asError(configQuery.error) : marketsQuery.error ? asError(marketsQuery.error) : null, retryRpc,
@@ -251,7 +231,18 @@ export function OutrunProvider({ children }: { children: ReactNode }) {
     connected, walletAddress, balance: balanceQuery.data, wrongNetwork, walletPending, walletError, writeBusy, connectWallet, switchToStudio, disconnectWallet, getPosition, placeBet, claim, claimRefund, settleMarket, createMarket, transaction: tracked, dismissTransaction: () => setTracked((current) => current && (current.stage === "FINALIZED_SUCCESS" || current.stage === "FINALIZED_ERROR") ? null : current),
   }), [activityCountQuery.data, activityQuery.data, activityQuery.isLoading, balanceQuery.data, claimableQuery.data, configQuery.data, configQuery.error, configQuery.isLoading, connected, createMarket, disconnectWallet, getPosition, marketsQuery.data, marketsQuery.error, marketsQuery.isLoading, marketsQuery.refetch, myMarketCountQuery.data, notificationsOpen, placeBet, positionsQuery.data, positionsQuery.error, positionsQuery.isLoading, provider, retryRpc, setNotificationsOpen, settleMarket, switchToStudio, tracked, walletAddress, walletError, walletPending, wrongNetwork, writeBusy]);
 
-  return <OutrunContext.Provider value={value}>{children}</OutrunContext.Provider>;
+  return <OutrunContext.Provider value={value}>
+    {children}
+    {kitRequest && <div className="transaction-kit-backdrop" role="dialog" aria-modal="true" aria-label={`${actionLabel(kitRequest.action)} transaction`}>
+      <div className="transaction-kit-dialog">
+        <div className="transaction-kit-heading">
+          <div><span className="panel-eyebrow">Wallet approval</span><h2>{actionLabel(kitRequest.action)}</h2></div>
+          <span className="transaction-kit-network">Studio Next · 61997</span>
+        </div>
+        <OutrunTransactionPanel account={walletAddress || null} injected={injected} readProvider={provider} request={kitRequest} onDone={completeKitRequest} onError={failKitRequest} />
+      </div>
+    </div>}
+  </OutrunContext.Provider>;
 }
 
 export function useOutrun() { const value = useContext(OutrunContext); if (!value) throw new Error("useOutrun must be used inside OutrunProvider"); return value; }

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { retryAfterMilliseconds } from "./lib/outrun/errors";
 import "./styles.css";
+import "@genlayer/transaction-kit-react/styles.css";
 
 const retryDelays = [2_000, 5_000, 10_000];
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 3, retryDelay: (attempt, error) => retryAfterMilliseconds(error) ?? retryDelays[Math.min(attempt, retryDelays.length - 1)] + Math.floor(Math.random() * 300), refetchOnWindowFocus: true, refetchIntervalInBackground: false } } });

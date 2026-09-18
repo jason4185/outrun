@@ -1,4 +1,4 @@
-export type OutrunErrorContext = "read" | "write" | "chart" | "post-submit" | "finalized-error";
+export type OutrunErrorContext = "read" | "write" | "chart" | "post-submit" | "finalized-error" | "fee-estimation" | "submission";
 
 export interface NormalizedOutrunError {
   code: string;
@@ -45,12 +45,24 @@ export function normalizeOutrunError(error: unknown, context: OutrunErrorContext
   let result: NormalizedOutrunError;
   if (submittedTransaction && (lower.includes("rate limit") || lower.includes("429") || lower.includes("timeout") || lower.includes("network") || lower.includes("still processing") || lower.includes("status check"))) {
     result = normalized("TX_STATUS_UNCERTAIN", "Transaction submitted", "We're having trouble checking its status. OUTRUN will keep tracking the same transaction.", true, true, error);
-  } else if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("429")) {
-    result = normalized("RATE_LIMIT", "Network is busy", "Studio Dev is receiving too many requests right now. Please wait a few seconds and try again.", true, false, error);
+  } else if (lower.includes("already been settled") || lower.includes("already settled")) {
+    result = normalized("ALREADY_SETTLED", "Already settled", "This market has already been settled.", false, false, error);
+  } else if (lower.includes("already resolved as inconclusive") || lower.includes("already inconclusive")) {
+    result = normalized("ALREADY_INCONCLUSIVE", "Already inconclusive", "This market has already resolved as inconclusive.", false, false, error);
+  } else if (lower.includes("after the 1-hour window") || lower.includes("market has not expired")) {
+    result = normalized("SETTLEMENT_UNAVAILABLE", "Settlement isn't available yet", "This market can be settled after the 1-hour window ends.", true, false, error);
+  } else if (lower.includes("majority_disagree") || lower.includes("consensus rejection") || lower.includes("consensus rejected")) {
+    result = normalized("CONSENSUS_REJECTED", "Consensus rejected", "GenLayer validators did not accept this transaction result.", false, true, error);
   } else if (lower.includes("user rejected") || lower.includes("user denied") || lower.includes("rejected the request") || lower.includes("denied transaction")) {
     result = normalized("USER_REJECTED", "Transaction cancelled", "You cancelled the wallet request.", false, false, error);
   } else if (lower.includes("wrong network") || lower.includes("chain") && lower.includes("61997")) {
     result = normalized("WRONG_NETWORK", "Wrong network", "Switch your wallet to Studio Dev to continue.", false, false, error);
+  } else if (context === "fee-estimation") {
+    result = normalized("FEE_ESTIMATION_FAILED", "Fee estimate unavailable", "GenLayer could not estimate the transaction fees. Check your wallet balance and try again.", true, false, error);
+  } else if (context === "submission") {
+    result = normalized("SUBMISSION_FAILED", "Wallet submission failed", "Your wallet could not submit this transaction. Check the selected account and network.", false, false, error);
+  } else if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("429")) {
+    result = normalized("RATE_LIMIT", "Network is busy", "Studio Dev is receiving too many requests right now. Please wait a few seconds and try again.", true, false, error);
   } else if (lower.includes("insufficient funds") || lower.includes("insufficient balance") || lower.includes("not enough gen")) {
     result = normalized("INSUFFICIENT_GEN", "Not enough GEN", "You don't have enough GEN for this transaction and its network fees.", false, false, error);
   } else if (lower.includes("minimum bet") || lower.includes("bet below")) {

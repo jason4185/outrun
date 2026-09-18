@@ -1,16 +1,13 @@
 import { createClient, isSuccessful } from "genlayer-js";
 import { studioDevnet } from "genlayer-js/chains";
 import { TransactionHashVariant, type CalldataEncodable, type GenLayerClient, type Hash } from "genlayer-js/types";
-import { isAddress, type Account, type Address } from "viem";
-import { ASSETS, CATEGORIES, SOURCES, type ActivityItem, type Asset, type BettingState, type Category, type ContractConfig, type ContractState, type Market, type OutrunDataProvider, type SourceEvidence, type SourceName, type SourceResult, type TransactionHandle, type UserPosition } from "./types";
+import { type Account } from "viem";
+import { ASSETS, CATEGORIES, SOURCES, type ActivityItem, type Asset, type BettingState, type Category, type ContractConfig, type ContractState, type Market, type OutrunDataProvider, type SourceEvidence, type SourceName, type SourceResult, type UserPosition } from "./types";
 import { OUTRUN_CONFIG } from "./config";
 
-type ClientConfig = NonNullable<Parameters<typeof createClient>[0]>;
-export type GenLayerWalletProvider = NonNullable<ClientConfig["provider"]>;
 type ReadClient = GenLayerClient<typeof studioDevnet>;
 
 export const readClient = createClient({ chain: OUTRUN_CONFIG.chain });
-export type WalletGenLayerClient = ReadClient;
 
 function asBigInt(value: unknown): bigint {
   if (typeof value === "bigint") return value;
@@ -112,14 +109,7 @@ async function read<T>(client: ReadClient, functionName: string, args: CalldataE
   return await client.readContract({ address: OUTRUN_CONFIG.address, functionName, args, ...(account ? { account: account as unknown as Account } : {}), transactionHashVariant: TransactionHashVariant.LATEST_FINAL }) as T;
 }
 
-async function write(client: WalletGenLayerClient | undefined, action: TransactionHandle["action"], functionName: string, args: CalldataEncodable[], value?: bigint, marketId?: number): Promise<TransactionHandle> {
-  if (!client) throw new Error("Connect an injected wallet on Studio Dev before submitting a transaction.");
-  const feeEstimate = await client.estimateTransactionFeesForWrite({ address: OUTRUN_CONFIG.address, functionName, args, ...(value !== undefined ? { value } : {}) });
-  const txId = await client.writeContract({ address: OUTRUN_CONFIG.address, functionName, args, ...(value !== undefined ? { value } : {}), fees: { distribution: feeEstimate.distribution, messageAllocations: feeEstimate.messageAllocations, feeValue: feeEstimate.feeValue } });
-  return { txId: String(txId), action, marketId };
-}
-
-export function createOutrunProvider(walletClient?: WalletGenLayerClient): OutrunDataProvider {
+export function createOutrunProvider(): OutrunDataProvider {
   return {
     async getConfig() {
       const raw = asRecord(await read(readClient, "get_config"));
@@ -152,18 +142,7 @@ export function createOutrunProvider(walletClient?: WalletGenLayerClient): Outru
         throw error;
       }
     },
-    createMarket: (category, marketStart) => write(walletClient, "create_market", "create_market", [category, BigInt(marketStart)]),
-    placeBet: (marketId, asset, amount) => write(walletClient, "place_bet", "place_bet", [BigInt(marketId), asset], amount, marketId),
-    settleMarket: (marketId) => write(walletClient, "settle_market", "settle_market", [BigInt(marketId)], undefined, marketId),
-    claim: (marketId) => write(walletClient, "claim", "claim", [BigInt(marketId)], undefined, marketId),
-    claimRefund: (marketId) => write(walletClient, "claim_refund", "claim_refund", [BigInt(marketId)], undefined, marketId),
   };
-}
-
-export function createWalletClient(address: Address, provider: GenLayerWalletProvider): WalletGenLayerClient {
-  if (!isAddress(address)) throw new Error("Wallet account unavailable. Reconnect your injected wallet.");
-  if (!provider || typeof provider.request !== "function") throw new Error("Injected wallet provider is unavailable. Reconnect your wallet.");
-  return createClient({ chain: OUTRUN_CONFIG.chain, account: address, provider });
 }
 
 export function transactionSucceeded(receipt: unknown): boolean { return isSuccessful(receipt as Parameters<typeof isSuccessful>[0]); }

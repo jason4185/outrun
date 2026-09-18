@@ -227,6 +227,21 @@ only. Binance does not decide the winner, supply contract settlement evidence,
 modify contract state, or participate in the 2-of-3 settlement quorum. The
 contract result remains authoritative.
 
+### Reviewer verification flow
+
+1. Connect an injected wallet on Studio Next / chain `61997`.
+2. Open an existing market or create a future UTC-hour market.
+3. Place a prediction before `market_start`.
+4. Wait until the complete one-hour market window ends at `market_end`.
+5. Settle the market.
+6. Inspect the Bybit, Gate, and Bitget settlement evidence.
+7. Winning wallets claim their payout; inconclusive positions refund their stake.
+
+Settlement cannot be called before `market_end`. For immediate proof without
+waiting, inspect already-settled market `1`: Gate and Bitget returned `QQQ`,
+Bybit was unavailable, and the contract resolved `QQQ` through its 2-of-3
+quorum in the transaction linked above.
+
 ## Contract Interface
 
 The constructor takes no arguments. Public methods are grouped below by role.

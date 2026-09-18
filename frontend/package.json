@@ -10,6 +10,8 @@
     "lint": "tsc -b --pretty false"
   },
   "dependencies": {
+    "@genlayer/transaction-kit": "0.1.0-rc.2",
+    "@genlayer/transaction-kit-react": "0.1.0-rc.2",
     "@tanstack/react-query": "5.102.8",
     "@vitejs/plugin-react": "latest",
     "genlayer-js": "2.0.0-rc.1",
